@@ -5,6 +5,7 @@ import logging
 import sys
 import os
 from impala.util import as_pandas
+from hdfs.client import InsecureClient
 
 _config_path = os.path.dirname(__file__)
 _config_file = _config_path + '/config.ini' if _config_path != '' else 'config.ini'
@@ -65,3 +66,6 @@ def thread_method(fn):
             logger.error(msg)
             has_error = True
     return fn_proxy
+
+def get_hdfs_client():
+    return InsecureClient(conf.get('hdfs', 'name_node_url'), user=conf.get('hdfs', 'hdfs_user'))

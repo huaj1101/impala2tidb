@@ -21,9 +21,12 @@ def get_table_schema(db, table, cursor):
     df = as_pandas(cursor)
     primary_keys = []
     columns = []
+    str_columns = []
     for i in range(len(df)):
-        name = df.at[i, 'name']
+        name = f'`{df.at[i, "name"]}`'
         type = df.at[i, 'type']
+        if type == 'string':
+            str_columns.append(name)
         nullable = df.at[i, 'nullable']
         default_value = df.at[i, 'default_value']
         primary_key = df.at[i, 'primary_key']
@@ -32,13 +35,24 @@ def get_table_schema(db, table, cursor):
         column_schema = {
             'name': name,
             'type': type,
+            'len': 0,
             'nullable': nullable,
             'default_value': default_value
         }
         columns.append(column_schema)
+    if str_columns:
+        sql = f'/*& global:true*/ select {",".join([f"ifnull(max(length({col})), 0) as {col}" for col in str_columns])} from {db}.{table}'
+        cursor.execute(sql)
+        df = as_pandas(cursor)
+        for i in range(len(df.columns)):
+            name = df.columns[i]
+            value = df.at[0, name]
+            for cs in columns:
+                if cs['name'] == name:
+                    cs['len'] = int(value)
     return {
-        'table': f'{db}.{table}', 
-        'clumns': columns,
+        'table': f'`{db}`.`{table}`', 
+        'columns': columns,
         'primary_keys': ','.join(primary_keys)
         }
 
@@ -75,7 +89,7 @@ def main():
         db = df.at[i, 'name']
         if db.startswith('global_') or db.startswith('asset_') or db.endswith('_custom') or db in special_dbs:
             dbs.append(db)
-    # dbs = ['global_platform']
+    # dbs = ['cr19_custom']
     pool = ThreadPoolExecutor(max_workers=threads)
     for db in dbs:
         pool.submit(get_db_schema, db, len(dbs))
