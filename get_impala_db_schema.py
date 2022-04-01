@@ -16,6 +16,25 @@ sql_times = {}
 lock = threading.Lock()
 finish_count = 0
 
+def get_pk_unique_subset(db, table, pk, cursor):
+    new_keys = []
+    if pk[0] == '`tenant`':
+        if '`id`' in pk:
+            new_keys.append('`tenant`')
+            new_keys.append('`id`')
+        else:
+            new_keys = pk
+    elif '`id`' in pk:
+        new_keys = ['`id`']
+    else:
+        new_keys = pk
+    sql = f'/*& global:true*/ SELECT count(*) FROM {db}.{table} group by {",".join(new_keys)} having count(*) > 1 limit 1'
+    cursor.execute(sql)
+    df = as_pandas(cursor)
+    if len(df) == 0:
+        return new_keys
+    return pk
+
 def get_table_schema(db, table, cursor):
     cursor.execute(f'describe {db}.{table}')
     df = as_pandas(cursor)
@@ -47,13 +66,16 @@ def get_table_schema(db, table, cursor):
         for i in range(len(df.columns)):
             name = df.columns[i]
             value = df.at[0, name]
+            name = f'`{name}`'
             for cs in columns:
                 if cs['name'] == name:
                     cs['len'] = int(value)
+
     return {
         'table': f'`{db}`.`{table}`', 
         'columns': columns,
-        'primary_keys': ','.join(primary_keys)
+        'primary_keys': ','.join(primary_keys),
+        'pk_unique_subset': ','.join(get_pk_unique_subset(db, table, primary_keys, cursor))
         }
 
 @utils.thread_method
@@ -62,6 +84,7 @@ def get_db_schema(db, total_count):
         thread_context.cursor = utils.get_impala_cursor()
     start = time.time()
     tables = utils.get_tables_in_impala_db(db, thread_context.cursor)
+    # tables = ['crssg_bi_labor_contract']
     table_schemas = []
     for table in tables:
         ts = get_table_schema(db, table, thread_context.cursor)
@@ -77,24 +100,14 @@ def get_db_schema(db, total_count):
     logger.info('(%d / %d) %s finish in %.1f seconds' % (finish_count, total_count, db, time_used))
     lock.release()
 
+@utils.timeit
 def main():
-    start = time.time()
-    special_dbs = ['public_data']
-    cursor = utils.get_impala_cursor()
-    cursor.execute('show databases')
-    threads = utils.conf.getint('sys', 'threads', fallback=1)
-    dbs = []
-    df = as_pandas(cursor)
-    for i in range(len(df)):
-        db = df.at[i, 'name']
-        if db.startswith('global_') or db.startswith('asset_') or db.endswith('_custom') or db in special_dbs:
-            dbs.append(db)
-    # dbs = ['cr19_custom']
-    pool = ThreadPoolExecutor(max_workers=threads)
+    dbs = utils.get_impala_dbs()
+    # dbs = ['crssg_custom']
+    pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for db in dbs:
         pool.submit(get_db_schema, db, len(dbs))
     pool.shutdown(wait=True)
-    logger.info('finish in %.1f seconds' % (time.time() - start))
 
 if __name__ == '__main__':
     main()

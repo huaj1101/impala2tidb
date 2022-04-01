@@ -19,11 +19,11 @@ lock = threading.Lock()
 finish_count = 0
 
 def translate_str_length(length):
-    if length * 4 <= 50:
+    if length <= 50:
         return 50
-    if length * 4 <= 255:
+    if length <= 255:
         return 255
-    if length * 4 <= 2000:
+    if length <= 2000:
         return 2000
     if length <= 16383: # varchar类型最大长度
         return 16383
@@ -64,25 +64,11 @@ def translate_default_value(tidb_type, default_value):
         default_value = f'"{default_value}"'
     return default_value
 
-def select_primary_keys(impala_primary_keys):
-    keys = impala_primary_keys.split(',')
-    new_keys = []
-    if keys[0] == '`tenant`':
-        if '`id`' in keys:
-            new_keys.append('`tenant`')
-            new_keys.append('`id`')
-        else:
-            new_keys = keys
-    elif '`id`' in keys:
-        new_keys = ['`id`']
-    else:
-        new_keys = keys
-    return ', '.join(new_keys)
 
 def create_one_table(table_schema, mysql_conn):
     table_name = table_schema['table']
     columns = table_schema['columns']
-    primary_keys = select_primary_keys(table_schema['primary_keys'])
+    primary_keys = table_schema['pk_unique_subset']
     create_sql_lines = []
     create_sql_lines.append(f'create table {table_name}')
     create_sql_lines.append('(')
@@ -119,16 +105,15 @@ def create_one_db(db, db_schema, total_count):
     logger.info('(%d / %d) %s finish in %.1f seconds' % (finish_count, total_count, db, time_used))
     lock.release()
 
+@utils.timeit
 def main():
-    start = time.time()
     files = []
     for file in os.listdir('schemas/'):
         if file.endswith('.json'):
             files.append(file)
     files.sort()
-    # files = ['global_platform.json']
-    threads = utils.conf.getint('sys', 'threads', fallback=1)
-    pool = ThreadPoolExecutor(max_workers=threads)
+    # files = ['crssg_custom.json']
+    pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for file in files:
         db = file.replace('.json', '')
         with open(f'schemas/{file}', 'r', encoding='utf-8') as f:
@@ -136,7 +121,6 @@ def main():
             db_schema = json.loads(schema_text)
         pool.submit(create_one_db, db, db_schema, len(files))
     pool.shutdown(wait=True)
-    logger.info('finish in %.1f seconds' % (time.time() - start))
 
 if __name__ == '__main__':
     main()

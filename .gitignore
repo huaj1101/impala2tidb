@@ -2,3 +2,4 @@ config.ini
 schemas
 test.log
 __pycache__
+data

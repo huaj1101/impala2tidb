@@ -16,74 +16,84 @@ sql_times = {}
 lock = threading.Lock()
 finish_count = 0
 dbs_created = set()
-BATCH_SIZE = 1e6
-
-def save_to_csv(df, file_name):
-    df.to_csv(f'data/{file_name}',sep='\u0001',na_rep='\\N',line_terminator='\u0002', header=False,index=False)
 
 @utils.thread_method
-def export_to_csv(table_schema, total_count):
+def get_table_data(table_schema, total_count):
     start = time.time()
-    if not hasattr(thread_context, 'cursor'):
-        thread_context.cursor = utils.get_impala_cursor()
-    table_full_name = table_schema['table']
-    db = table_full_name.split('.')[0].strip('`')
-    table = table_full_name.split('.')[1].strip('`')
+    if not hasattr(thread_context, 'hdfsclient'):
+        thread_context.hdfsclient = utils.get_hdfs_client()
+    db = table_schema['table'].split('.')[0].strip('`')
+    text_db = db + '_text'
+    table = table_schema['table'].split('.')[1].strip('`')
+    cursor = utils.get_impala_cursor()
+    lock.acquire()
+    if text_db not in dbs_created:
+        cursor.execute(f'drop database if exists {text_db} cascade')
+        cursor.execute(f'create database {text_db}')
+        time.sleep(2)
+        dbs_created.add(text_db)
+    lock.release()
 
-    batch_count = 1
-    has_id_field = False
-    for cs in table_schema['columns']:
-        if cs['name'] == '`id`' and cs['type'] == 'bigint':
-            has_id_field = True
-    if has_id_field:
-        sql = f'/*& global:true*/ select count(*) as cnt from {table_full_name}'
-        thread_context.cursor.execute(sql)
-        df = as_pandas(thread_context.cursor)
-        record_count = df.at[0, 'cnt']
-        batch_count = int(record_count / BATCH_SIZE) + 1
-    if batch_count == 1:
-        sql = f'/*& global:true*/ select * from {table_full_name}'
-        thread_context.cursor.execute(sql)
-        df = as_pandas(thread_context.cursor)
-        save_to_csv(df, f'{db}.{table}.001.csv')
-    else:
-        for i in range(batch_count):
-            sql = f'/*& global:true*/ select * from {table_full_name} where id % {batch_count} = {i}'
-            thread_context.cursor.execute(sql)
-            df = as_pandas(thread_context.cursor)
-            save_to_csv(df, f'{db}.{table}.{i+1:0>3d}.csv')
+    # 拷贝到textfile格式的表中（以便产生csv）
+    sql = f'/*& global:true*/ create table {text_db}.{table} ROW FORMAT DELIMITED LINES TERMINATED BY "\u0002" stored as textfile' +\
+        f' as select * from {db}.{table}'
+    cursor.execute(sql)
+    cursor.execute(f'refresh {text_db}.{table}')
+    cursor.close()
+
+    # 拷贝csv到本地
+    hdfs_path = f'/user/hive/warehouse/{text_db}.db/{table}'
+    csv_files = []
+    for item in thread_context.hdfsclient.list(hdfs_path):
+        if item.endswith('.'):
+            csv_files.append(item)
+    csv_files.sort()
+    for i, file in enumerate(csv_files):
+        hdfs_file = f'/user/hive/warehouse/{text_db}.db/{table}/{file}'
+        local_file = f'data/{db}.{table}.{i+1:0>3d}.csv'
+        thread_context.hdfsclient.download(hdfs_file, local_file, overwrite=True)
+
+    # 删除textfile表（节省空间）
+    cursor = utils.get_impala_cursor()
+    cursor.execute(f'drop table {text_db}.{table}')
+    cursor.close()
+
     time_used = time.time() - start
 
     global finish_count
     lock.acquire()
     finish_count += 1
-    logger.info('(%d / %d) %s finish in %.1f seconds' % (finish_count, total_count, table, time_used))
+    logger.info('(%d / %d) %s.%s finish in %.1f seconds' % (finish_count, total_count, db, table, time_used))
     lock.release()
 
+@utils.timeit
 def main():
-    start = time.time()
     files = []
     for file in os.listdir('schemas/'):
         if file.endswith('.json'):
             files.append(file)
     files.sort()
-    files = ['global_platform.json']
-    threads = utils.conf.getint('sys', 'threads', fallback=1)
-    pool = ThreadPoolExecutor(max_workers=threads)
+    # files = ['fheb_custom.json']
+    pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     table_schemas = []
     for file in files:
+        db = file.replace('.json', '')
         with open(f'schemas/{file}', 'r', encoding='utf-8') as f:
             schema_text = f.read()
             db_schema = json.loads(schema_text)
             table_schemas.extend(db_schema)
 
-    logger.info('export_to_csv')
+    logger.info('get_table_data')
     for table_schema in table_schemas:
-        pool.submit(export_to_csv, table_schema, len(table_schemas))
+        pool.submit(get_table_data, table_schema, len(table_schemas))
     pool.shutdown(wait=True)
 
-    logger.info('finish in %.1f seconds' % (time.time() - start))
-
+    logger.info('drop text databases')
+    cursor = utils.get_impala_cursor()
+    for db in dbs_created:
+        logger.info(f'drop {db} ...')
+        cursor.execute(f'drop database {db} cascade')
+    cursor.close()
 
 if __name__ == '__main__':
     main()
