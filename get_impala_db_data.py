@@ -55,7 +55,7 @@ def get_table_data(table_schema, total_count):
 
     # 删除textfile表（节省空间）
     cursor = utils.get_impala_cursor()
-    cursor.execute(f'drop table {text_db}.{table}')
+    cursor.execute(f'drop table {text_db}.{table} PURGE')
     cursor.close()
 
     time_used = time.time() - start
