@@ -25,6 +25,8 @@ def get_table_data(table_schema, total_count):
     db = table_schema['table'].split('.')[0].strip('`')
     text_db = db + '_text'
     table = table_schema['table'].split('.')[1].strip('`')
+    # if table != 'component': 
+    #     return
     cursor = utils.get_impala_cursor()
     lock.acquire()
     if text_db not in dbs_created:
@@ -35,9 +37,11 @@ def get_table_data(table_schema, total_count):
     lock.release()
 
     # 拷贝到textfile格式的表中（以便产生csv）
-    sql = f'/*& global:true*/ create table {text_db}.{table} ROW FORMAT DELIMITED LINES TERMINATED BY "\u0002" stored as textfile' +\
-        f' as select * from {db}.{table}'
-    cursor.execute(sql)
+    sql = f'create table {text_db}.{table} ' +\
+        'ROW FORMAT DELIMITED FIELDS TERMINATED BY "\u0006" ESCAPED BY "\\\\" LINES TERMINATED BY "\u0007" ' +\
+        'stored as textfile ' +\
+        f'as select * from {db}.{table}'
+    utils.exec_sql(cursor, sql)
     cursor.execute(f'refresh {text_db}.{table}')
     cursor.close()
 
@@ -73,7 +77,7 @@ def main():
         if file.endswith('.json'):
             files.append(file)
     files.sort()
-    # files = ['fheb_custom.json']
+    # files = ['global_ipm.json']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     table_schemas = []
     for file in files:

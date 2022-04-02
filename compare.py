@@ -74,7 +74,7 @@ def compare_tables_in_one_db(db, total_count):
     if not mismatch:
         tables.extend([TableInfo(db, table) for table in tables_impala])
     finish_count += 1
-    logger.info('  (%d / %d) compare_tables in {%s} finish in %.1f seconds--' % (finish_count, total_count, db, time.time() - start))
+    logger.info('  %d / %d compare_tables in %s finish in %.1f seconds--' % (finish_count, total_count, db, time.time() - start))
     lock.release()
 
 @utils.timeit
@@ -88,7 +88,6 @@ def compare_tables(dbs):
 
 @utils.thread_method
 def compare_one_table_schema(table: TableInfo, total_count):
-    start = time.time()
     if not hasattr(thread_context, 'impala_cursor'):
         thread_context.impala_cursor = utils.get_impala_cursor()
     if not hasattr(thread_context, 'mysql_conn'):
@@ -134,7 +133,7 @@ def compare_one_table_schema(table: TableInfo, total_count):
     lock.acquire()
     finish_count += 1
     if finish_count % 100 == 0:
-        logger.info(f'  {finish_count} / {total_count} finished')
+        logger.info(f'  {finish_count} / {total_count} compare table schema finished')
     lock.release()
 
 @utils.timeit
@@ -153,6 +152,74 @@ def compare_tables_schema():
         global mismatch
         mismatch = True
         logger.error(f'  table schema mismatch count: {error_count}')
+
+@utils.thread_method
+def compare_one_table_data(table: TableInfo, total_count):
+    if not hasattr(thread_context, 'impala_cursor'):
+        thread_context.impala_cursor = utils.get_impala_cursor()
+    if not hasattr(thread_context, 'mysql_conn'):
+        thread_context.mysql_engine = utils.get_mysql_engine()
+        thread_context.mysql_conn = thread_context.mysql_engine.connect()
+
+    # check record count
+    sql = f'select count(*) as cnt from {table.db}.`{table.table}`'
+    utils.exec_sql(thread_context.impala_cursor, sql)
+    df_impala = as_pandas(thread_context.impala_cursor)
+    cnt_impala = df_impala.at[0, 'cnt']
+
+    df_tidb = pd.read_sql_query(sql, thread_context.mysql_conn)
+    cnt_tidb = df_tidb.at[0, 'cnt']
+    if cnt_impala != cnt_tidb:
+        logger.error(f'  {table.full_name} record count mismatch, impala: {cnt_impala}, tidb: {cnt_tidb}')
+        table.data_match = False
+    else:
+        # check max column (if exists)
+        if 'id' in table.cols:
+            compare_field_max_value(thread_context.impala_cursor, thread_context.mysql_conn, table, 'id', False)
+        if 'version' in table.cols:
+            compare_field_max_value(thread_context.impala_cursor, thread_context.mysql_conn, table, 'version', False)
+        if 'updated_at' in table.cols:
+            compare_field_max_value(thread_context.impala_cursor, thread_context.mysql_conn, table, 'updated_at', True)
+
+    global finish_count
+    lock.acquire()
+    finish_count += 1
+    if finish_count % 100 == 0:
+        logger.info(f'  {finish_count} / {total_count} compare table data finished')
+    lock.release()
+
+def compare_field_max_value(impala_cursor, mysql_conn, table: TableInfo, field, is_timestamp):
+    if is_timestamp:
+        sql_impala = f'select max(cast(round(cast({field} as double)) as TIMESTAMP)) as max_value from {table.db}.`{table.table}`'
+    else:
+        sql_impala = f'select max({field}) as max_value from {table.db}.`{table.table}`'
+    utils.exec_sql(impala_cursor, sql_impala)
+    df_impala = as_pandas(impala_cursor)
+    impala_value = df_impala.at[0, 'max_value']
+
+    sql_tidb = f'select max({field}) as max_value from {table.db}.`{table.table}`'
+    df_tidb = pd.read_sql_query(sql_tidb, mysql_conn)
+    tidb_value = df_tidb.at[0, 'max_value']
+    if impala_value != tidb_value:
+        logger.error(f'  {table.full_name} max {field} mismatch, impala: {impala_value}, tidb: {tidb_value}')
+        table.data_match = False
+
+@utils.timeit
+def compare_tables_data():
+    global finish_count
+    finish_count = 0
+    pool = ThreadPoolExecutor(max_workers=utils.thread_count)
+    for table in tables:
+        pool.submit(compare_one_table_data, table, len(tables))
+    pool.shutdown(wait=True)
+    error_count = 0
+    for table in tables:
+        if not table.data_match:
+            error_count += 1
+    if error_count > 0:
+        global mismatch
+        mismatch = True
+        logger.error(f'  table data mismatch count: {error_count}')
 
 @utils.timeit
 def main():
@@ -173,6 +240,11 @@ def main():
     compare_tables_schema()
     if mismatch: 
         logger.error('tables schema mismatch')
+        return
+    # 比较每张表的data
+    compare_tables_data()
+    if mismatch: 
+        logger.error('tables data mismatch')
         return
 
 if __name__ == '__main__':

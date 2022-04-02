@@ -15,6 +15,9 @@ thread_context = threading.local()
 sql_times = {}
 lock = threading.Lock()
 finish_count = 0
+# error_columns = []
+# ACK = '\u0006'
+# BEL = '\u0007'
 
 def get_pk_unique_subset(db, table, pk, cursor):
     new_keys = []
@@ -28,8 +31,8 @@ def get_pk_unique_subset(db, table, pk, cursor):
         new_keys = ['`id`']
     else:
         new_keys = pk
-    sql = f'/*& global:true*/ SELECT count(*) FROM {db}.{table} group by {",".join(new_keys)} having count(*) > 1 limit 1'
-    cursor.execute(sql)
+    sql = f'SELECT count(*) FROM {db}.{table} group by {",".join(new_keys)} having count(*) > 1 limit 1'
+    utils.exec_sql(cursor, sql)
     df = as_pandas(cursor)
     if len(df) == 0:
         return new_keys
@@ -60,8 +63,8 @@ def get_table_schema(db, table, cursor):
         }
         columns.append(column_schema)
     if str_columns:
-        sql = f'/*& global:true*/ select {",".join([f"ifnull(max(length({col})), 0) as {col}" for col in str_columns])} from {db}.{table}'
-        cursor.execute(sql)
+        sql = f'select {",".join([f"ifnull(max(length({col})), 0) as {col}" for col in str_columns])} from {db}.{table}'
+        utils.exec_sql(cursor, sql)
         df = as_pandas(cursor)
         for i in range(len(df.columns)):
             name = df.columns[i]
@@ -70,7 +73,12 @@ def get_table_schema(db, table, cursor):
             for cs in columns:
                 if cs['name'] == name:
                     cs['len'] = int(value)
-
+        # for col in str_columns:
+        #     sql = f'select count(*) as cnt from {db}.{table} where {col} like "%{ACK}%" or {col} like "%{BEL}%"'
+        #     utils.exec_sql(cursor, sql)
+        #     df = as_pandas(cursor)
+        #     if df.at[0, 'cnt'] > 0:
+        #         error_columns.append(f'{db}.{table}.{col}')
     return {
         'table': f'`{db}`.`{table}`', 
         'columns': columns,
@@ -84,7 +92,7 @@ def get_db_schema(db, total_count):
         thread_context.cursor = utils.get_impala_cursor()
     start = time.time()
     tables = utils.get_tables_in_impala_db(db, thread_context.cursor)
-    # tables = ['crssg_bi_labor_contract']
+    # tables = ['project_entry_work']
     table_schemas = []
     for table in tables:
         ts = get_table_schema(db, table, thread_context.cursor)
@@ -103,11 +111,13 @@ def get_db_schema(db, total_count):
 @utils.timeit
 def main():
     dbs = utils.get_impala_dbs()
-    # dbs = ['crssg_custom']
+    # dbs = ['global_ipm']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for db in dbs:
         pool.submit(get_db_schema, db, len(dbs))
     pool.shutdown(wait=True)
+    # for col in error_columns:
+    #     logger.error(col)
 
 if __name__ == '__main__':
     main()

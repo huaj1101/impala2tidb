@@ -51,6 +51,13 @@ def get_impala_cursor():
     cursor = conn.cursor()
     return cursor
 
+# def get_impala_cursor_prod():
+#     conn = impala.dbapi.connect(host=conf.get('impala-prod', 'host'), port=conf.getint('impala-prod', 'port'), 
+#         database=conf.get('impala-prod', 'db'), auth_mechanism='PLAIN', user=conf.get('impala-prod', 'user'), 
+#         password=conf.get('impala-prod', 'pwd'))
+#     cursor = conn.cursor()
+#     return cursor
+
 def filter_db(db):
     special_dbs = ['public_data']
     ignore_dbs = ['global_dw_1', 'global_dw_2', 'global_dwb']
@@ -95,6 +102,21 @@ def get_tables_in_tidb_db(db, conn):
     for i in range(len(df)):
         tables.append(df.at[i, f'Tables_in_{db}'])
     return tables
+
+def exec_sql(cursor, sql, query_options=None):
+    sql = "/*& global:true */ \n" + sql
+    # 极少数时候会出现偶发异常：[Errno 104] Connection reset by peer
+    # 加入一次重试
+    try:
+        cursor.execute(sql, configuration=query_options)
+    except:
+        time.sleep(0.1)
+        cursor.execute(sql, configuration=query_options)
+    execute_logs = cursor.get_log().split('\n')
+    if len(execute_logs) > 2:
+        err_msg = '\n'.join(execute_logs[1:len(execute_logs) - 1])
+        # print(sql)
+        raise Exception(err_msg)
 
 # 线程方法如果发生异常，必须在线程内捕获并记录，主线程得不到通知
 def thread_method(fn):
