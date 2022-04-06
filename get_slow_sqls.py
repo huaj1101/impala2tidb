@@ -14,16 +14,27 @@ logger = logging.getLogger(__name__)
 
 def main():
     cursor = utils.get_impala_cursor_prod()
-    cursor.execute("SELECT db, user, statement FROM dp_stat.impala_sql_statistics where type = 'slow' and statement not like '%...%'")
+    sql = '''
+SELECT db, user, statement, hash_id
+FROM dp_stat.impala_sql_statistics 
+where type = 'slow' 
+      and query_state = 'FINISHED' 
+      and duration < 30
+      and statement not like '%...%' 
+order by created_at, hash_id
+'''
+    cursor.execute(sql)
     df = as_pandas(cursor)
     cursor.close()
     pattern_user = "(.*)_internal_(write|read)"
     pattern_statement = r'(/\*&.*\*/)'
     count = 0
     cursor = utils.get_impala_cursor()
+    cursor.execute('delete from default.slow_sqls')
     for i in range(len(df)):
         db = df.at[i, 'db']
         user = df.at[i, 'user']
+        hash_id = df.at[i, 'hash_id']
         statement = df.at[i, 'statement']
         statement = re.sub(pattern_statement, '', statement)
         if '{{tenant}}' in statement:
@@ -36,8 +47,8 @@ def main():
                 print(f'skip one:\n{statement}')
                 continue
             statement = statement.replace('{{tenant}}', tenant)
-        sql = 'insert into default.slow_sqls (id, db, statement) values (?, ?, ?)'
-        cursor.execute(sql, [i + 1, db, statement], {'paramstyle': 'qmark'})
+        sql = 'insert into default.slow_sqls (id, db, statement, hash_id) values (?, ?, ?, ?)'
+        cursor.execute(sql, [i + 1, db, statement, hash_id], {'paramstyle': 'qmark'})
         count += 1
         if count % 100 == 0:
             print(f'{count} / {len(df)} inserted')

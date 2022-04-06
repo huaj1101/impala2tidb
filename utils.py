@@ -51,12 +51,12 @@ def get_impala_cursor():
     cursor = conn.cursor()
     return cursor
 
-# def get_impala_cursor_prod():
-#     conn = impala.dbapi.connect(host=conf.get('impala-prod', 'host'), port=conf.getint('impala-prod', 'port'), 
-#         database=conf.get('impala-prod', 'db'), auth_mechanism='PLAIN', user=conf.get('impala-prod', 'user'), 
-#         password=conf.get('impala-prod', 'pwd'))
-#     cursor = conn.cursor()
-#     return cursor
+def get_impala_cursor_prod():
+    conn = impala.dbapi.connect(host=conf.get('impala-prod', 'host'), port=conf.getint('impala-prod', 'port'), 
+        database=conf.get('impala-prod', 'db'), auth_mechanism='PLAIN', user=conf.get('impala-prod', 'user'), 
+        password=conf.get('impala-prod', 'pwd'))
+    cursor = conn.cursor()
+    return cursor
 
 def filter_db(db):
     special_dbs = ['public_data']
