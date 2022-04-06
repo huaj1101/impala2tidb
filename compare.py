@@ -231,7 +231,7 @@ def main():
         logger.error('dbs mismatch')
         return
     # 比较表是否匹配
-    # dbs_impala = ['global_platform']
+    # dbs_impala = ['global_mtlp']
     compare_tables(dbs_impala)
     if mismatch: 
         logger.error('tables mismatch')
