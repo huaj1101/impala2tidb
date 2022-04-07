@@ -12,7 +12,7 @@ import re
 
 logger = logging.getLogger(__name__)
 
-def main():
+def insert_into_impala():
     cursor = utils.get_impala_cursor_prod()
     sql = '''
 SELECT db, user, statement, hash_id
@@ -31,6 +31,7 @@ order by created_at, hash_id
     count = 0
     cursor = utils.get_impala_cursor()
     cursor.execute('delete from default.slow_sqls')
+
     for i in range(len(df)):
         db = df.at[i, 'db']
         user = df.at[i, 'user']
@@ -47,16 +48,27 @@ order by created_at, hash_id
                 print(f'skip one:\n{statement}')
                 continue
             statement = statement.replace('{{tenant}}', tenant)
-        sql = 'insert into default.slow_sqls (id, db, statement, hash_id) values (?, ?, ?, ?)'
+        sql = 'insert into default.slow_sqls (id, db, hash_id, sql_impala) values (?, ?, ?, ?)'
         cursor.execute(sql, [i + 1, db, statement, hash_id], {'paramstyle': 'qmark'})
         count += 1
         if count % 100 == 0:
-            print(f'{count} / {len(df)} inserted')
-
+            print(f'{count} / {len(df)} inserted to impala default.slow_sqls')
+    cursor.execute('update default.slow_sqls set sql_tidb = sql_impala')
     cursor.close()
     if count % 100 != 0:
-        print(f'{count} / {len(df)} inserted')
+        print(f'{count} / {len(df)} inserted to impala default.slow_sqls')
 
+def insert_into_tidb():
+    cursor = utils.get_impala_cursor()
+    utils.exec_sql(cursor, 'select * from default.slow_sqls')
+    df = as_pandas(cursor)
+    print(f'{len(df)} loaded from impala default.slow_sqls')
+    cursor.close()
+    engine = utils.get_mysql_engine()
+    mysql_conn = engine.connect()
+    df.to_sql('slow_sqls', mysql_conn, 'test', if_exists='append', index=False)
+    print(f'{len(df)} inserted to tidb test.slow_sqls')
 
 if __name__ == '__main__':
-    main()
+    # insert_into_impala()
+    insert_into_tidb()

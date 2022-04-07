@@ -51,3 +51,11 @@ where hash_id in (
 '2896a8a027d25e9eb1c31b97f6f3e0d3',
 '130b7410b738deeee9c753bc9f09cabb'
 )
+;
+UPDATE default.slow_sqls 
+SET sql_impala = REPLACE(sql_impala, 'NULLS FIRST', '')
+WHERE sql_impala LIKE '%NULLS FIRST%'
+;
+UPDATE default.slow_sqls 
+SET sql_impala = REPLACE(sql_impala, 'isnull(', 'ifnull(')
+WHERE sql_impala LIKE '%isnull(%'
