@@ -36,12 +36,12 @@ logging.getLogger('impala').setLevel('ERROR')
 logger = logging.getLogger(__name__)
 thread_count = conf.getint('sys', 'threads', fallback=1)
 
-def get_mysql_engine():
-    host = conf.get('mysql', 'host')
-    port = conf.get('mysql', 'port')
-    user = conf.get('mysql', 'user')
-    pwd = conf.get('mysql', 'pwd')
-    db = conf.get('mysql', 'db')
+def get_tidb_engine():
+    host = conf.get('tidb', 'host')
+    port = conf.get('tidb', 'port')
+    user = conf.get('tidb', 'user')
+    pwd = conf.get('tidb', 'pwd')
+    db = conf.get('tidb', 'db')
     con_str = f'mysql+mysqldb://{user}:{pwd}@{host}:{port}/{db}?charset=utf8'
     return sqlalchemy.create_engine(con_str)
 
@@ -77,7 +77,7 @@ def get_impala_dbs():
     return dbs
 
 def get_tidb_dbs():
-    engine = get_mysql_engine()
+    engine = get_tidb_engine()
     conn = engine.connect()
     df = pd.read_sql_query('show databases', conn)
     dbs = []

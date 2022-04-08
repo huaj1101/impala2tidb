@@ -21,31 +21,31 @@ finish_count = 0
 
 @utils.thread_method
 def truncate_table_tidb(table_schema, total_count):
-    if not hasattr(thread_context, 'mysql_conn'):
-        thread_context.mysql_engine = utils.get_mysql_engine()
-        thread_context.mysql_conn = thread_context.mysql_engine.connect()
+    if not hasattr(thread_context, 'tidb_conn'):
+        thread_context.tidb_engine = utils.get_tidb_engine()
+        thread_context.tidb_conn = thread_context.tidb_engine.connect()
     sql = f'truncate {table_schema["table"]}'
-    thread_context.mysql_conn.execute(sql)
+    thread_context.tidb_conn.execute(sql)
     
     global finish_count
     lock.acquire()
     finish_count += 1
-    if finish_count % 100 == 0:
+    if finish_count % 10 == 0:
         logger.info('%d / %d truncate' % (finish_count, total_count))
     lock.release()
 
 @utils.thread_method
 def analyze_table_tidb(table_schema, total_count):
-    if not hasattr(thread_context, 'mysql_conn'):
-        thread_context.mysql_engine = utils.get_mysql_engine()
-        thread_context.mysql_conn = thread_context.mysql_engine.connect()
+    if not hasattr(thread_context, 'tidb_conn'):
+        thread_context.tidb_engine = utils.get_tidb_engine()
+        thread_context.tidb_conn = thread_context.tidb_engine.connect()
     sql = f'ANALYZE TABLE {table_schema["table"]}'
-    thread_context.mysql_conn.execute(sql)
+    thread_context.tidb_conn.execute(sql)
     
     global finish_count
     lock.acquire()
     finish_count += 1
-    if finish_count % 100 == 0:
+    if finish_count % 10 == 0:
         logger.info('%d / %d ANALYZE' % (finish_count, total_count))
     lock.release()
 
@@ -59,7 +59,7 @@ def analyze_table_impala(table_schema, total_count):
     global finish_count
     lock.acquire()
     finish_count += 1
-    if finish_count % 100 == 0:
+    if finish_count % 10 == 0:
         logger.info('%d / %d compute stats' % (finish_count, total_count))
     lock.release()
 
@@ -96,6 +96,6 @@ if __name__ == '__main__':
         engine = sys.argv[1]
         action = sys.argv[2]
     else:
-        logger.error('param shoud be: mysql/impala truncate/analyze')
+        logger.error('param shoud be: impala/tidb truncate/analyze')
         sys.exit(1)
     run(engine, action)

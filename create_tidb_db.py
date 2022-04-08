@@ -65,7 +65,7 @@ def translate_default_value(tidb_type, default_value):
     return default_value
 
 
-def create_one_table(table_schema, mysql_conn):
+def create_one_table(table_schema, tidb_conn):
     table_name = table_schema['table']
     columns = table_schema['columns']
     primary_keys = table_schema['pk_unique_subset']
@@ -83,20 +83,20 @@ def create_one_table(table_schema, mysql_conn):
         create_sql_lines.append(column_statement)
     create_sql_lines.append(f'\tPRIMARY KEY ({primary_keys}) /*T![clustered_index] CLUSTERED */')
     create_sql_lines.append(')')
-    mysql_conn.execute('\n'.join(create_sql_lines))
-    mysql_conn.execute(f'ALTER TABLE {table_name} SET TIFLASH REPLICA 3')
+    tidb_conn.execute('\n'.join(create_sql_lines))
+    tidb_conn.execute(f'ALTER TABLE {table_name} SET TIFLASH REPLICA 3')
     # print('\n'.join(create_sql_lines))
 
 @utils.thread_method
 def create_one_db(db, db_schema, total_count):
     start = time.time()
-    if not hasattr(thread_context, 'mysql_conn'):
-        thread_context.mysql_engine = utils.get_mysql_engine()
-        thread_context.mysql_conn = thread_context.mysql_engine.connect()
-    thread_context.mysql_conn.execute(f'DROP DATABASE IF EXISTS {db}')
-    thread_context.mysql_conn.execute(f'CREATE DATABASE {db}')
+    if not hasattr(thread_context, 'tidb_conn'):
+        thread_context.tidb_engine = utils.get_tidb_engine()
+        thread_context.tidb_conn = thread_context.tidb_engine.connect()
+    thread_context.tidb_conn.execute(f'DROP DATABASE IF EXISTS {db}')
+    thread_context.tidb_conn.execute(f'CREATE DATABASE {db}')
     for table_schema in db_schema:
-        create_one_table(table_schema, thread_context.mysql_conn)
+        create_one_table(table_schema, thread_context.tidb_conn)
         # break
     time_used = time.time() - start
     global finish_count

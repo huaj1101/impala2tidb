@@ -51,11 +51,11 @@ def compare_tables_in_one_db(db, total_count):
     start = time.time()
     if not hasattr(thread_context, 'impala_cursor'):
         thread_context.impala_cursor = utils.get_impala_cursor()
-    if not hasattr(thread_context, 'mysql_conn'):
-        thread_context.mysql_engine = utils.get_mysql_engine()
-        thread_context.mysql_conn = thread_context.mysql_engine.connect()
+    if not hasattr(thread_context, 'tidb_conn'):
+        thread_context.tidb_engine = utils.get_tidb_engine()
+        thread_context.tidb_conn = thread_context.tidb_engine.connect()
     tables_impala = utils.get_tables_in_impala_db(db, thread_context.impala_cursor)
-    tables_tidb = utils.get_tables_in_tidb_db(db, thread_context.mysql_conn)
+    tables_tidb = utils.get_tables_in_tidb_db(db, thread_context.tidb_conn)
     # print(len(tables_impala))
     # print(len(tables_tidb))
     tables_impala_set = set(tables_impala)
@@ -90,9 +90,9 @@ def compare_tables(dbs):
 def compare_one_table_schema(table: TableInfo, total_count):
     if not hasattr(thread_context, 'impala_cursor'):
         thread_context.impala_cursor = utils.get_impala_cursor()
-    if not hasattr(thread_context, 'mysql_conn'):
-        thread_context.mysql_engine = utils.get_mysql_engine()
-        thread_context.mysql_conn = thread_context.mysql_engine.connect()
+    if not hasattr(thread_context, 'tidb_conn'):
+        thread_context.tidb_engine = utils.get_tidb_engine()
+        thread_context.tidb_conn = thread_context.tidb_engine.connect()
 
     sql = f'describe {table.full_name}'
     thread_context.impala_cursor.execute(sql)
@@ -101,7 +101,7 @@ def compare_one_table_schema(table: TableInfo, total_count):
         table.is_parquet = True
     col_cnt_impala = len(df_impala)
 
-    df_tidb = pd.read_sql_query(sql, thread_context.mysql_conn)
+    df_tidb = pd.read_sql_query(sql, thread_context.tidb_conn)
     col_cnt_tidb = len(df_tidb)
     global mismatch
     if col_cnt_impala != col_cnt_tidb:
@@ -157,9 +157,9 @@ def compare_tables_schema():
 def compare_one_table_data(table: TableInfo, total_count):
     if not hasattr(thread_context, 'impala_cursor'):
         thread_context.impala_cursor = utils.get_impala_cursor()
-    if not hasattr(thread_context, 'mysql_conn'):
-        thread_context.mysql_engine = utils.get_mysql_engine()
-        thread_context.mysql_conn = thread_context.mysql_engine.connect()
+    if not hasattr(thread_context, 'tidb_conn'):
+        thread_context.tidb_engine = utils.get_tidb_engine()
+        thread_context.tidb_conn = thread_context.tidb_engine.connect()
 
     # check record count
     sql = f'select count(*) as cnt from {table.db}.`{table.table}`'
@@ -167,7 +167,7 @@ def compare_one_table_data(table: TableInfo, total_count):
     df_impala = as_pandas(thread_context.impala_cursor)
     cnt_impala = df_impala.at[0, 'cnt']
 
-    df_tidb = pd.read_sql_query(sql, thread_context.mysql_conn)
+    df_tidb = pd.read_sql_query(sql, thread_context.tidb_conn)
     cnt_tidb = df_tidb.at[0, 'cnt']
     if cnt_impala != cnt_tidb:
         logger.error(f'  {table.full_name} record count mismatch, impala: {cnt_impala}, tidb: {cnt_tidb}')
@@ -175,11 +175,11 @@ def compare_one_table_data(table: TableInfo, total_count):
     else:
         # check max column (if exists)
         if 'id' in table.cols:
-            compare_field_max_value(thread_context.impala_cursor, thread_context.mysql_conn, table, 'id', False)
+            compare_field_max_value(thread_context.impala_cursor, thread_context.tidb_conn, table, 'id', False)
         if 'version' in table.cols:
-            compare_field_max_value(thread_context.impala_cursor, thread_context.mysql_conn, table, 'version', False)
+            compare_field_max_value(thread_context.impala_cursor, thread_context.tidb_conn, table, 'version', False)
         if 'updated_at' in table.cols:
-            compare_field_max_value(thread_context.impala_cursor, thread_context.mysql_conn, table, 'updated_at', True)
+            compare_field_max_value(thread_context.impala_cursor, thread_context.tidb_conn, table, 'updated_at', True)
 
     global finish_count
     lock.acquire()
@@ -188,7 +188,7 @@ def compare_one_table_data(table: TableInfo, total_count):
         logger.info(f'  {finish_count} / {total_count} compare table data finished')
     lock.release()
 
-def compare_field_max_value(impala_cursor, mysql_conn, table: TableInfo, field, is_timestamp):
+def compare_field_max_value(impala_cursor, tidb_conn, table: TableInfo, field, is_timestamp):
     if is_timestamp:
         sql_impala = f'select max(cast(round(cast({field} as double)) as TIMESTAMP)) as max_value from {table.db}.`{table.table}`'
     else:
@@ -198,7 +198,7 @@ def compare_field_max_value(impala_cursor, mysql_conn, table: TableInfo, field, 
     impala_value = df_impala.at[0, 'max_value']
 
     sql_tidb = f'select max({field}) as max_value from {table.db}.`{table.table}`'
-    df_tidb = pd.read_sql_query(sql_tidb, mysql_conn)
+    df_tidb = pd.read_sql_query(sql_tidb, tidb_conn)
     tidb_value = df_tidb.at[0, 'max_value']
     if impala_value != tidb_value:
         logger.error(f'  {table.full_name} max {field} mismatch, impala: {impala_value}, tidb: {tidb_value}')

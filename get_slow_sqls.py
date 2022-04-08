@@ -64,9 +64,9 @@ def insert_into_tidb():
     df = as_pandas(cursor)
     print(f'{len(df)} loaded from impala default.slow_sqls')
     cursor.close()
-    engine = utils.get_mysql_engine()
-    mysql_conn = engine.connect()
-    df.to_sql('slow_sqls', mysql_conn, 'test', if_exists='append', index=False)
+    engine = utils.get_tidb_engine()
+    tidb_conn = engine.connect()
+    df.to_sql('slow_sqls', tidb_conn, 'test', if_exists='append', index=False)
     print(f'{len(df)} inserted to tidb test.slow_sqls')
 
 if __name__ == '__main__':
