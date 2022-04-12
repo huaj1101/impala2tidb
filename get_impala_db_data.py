@@ -77,7 +77,7 @@ def main():
         if file.endswith('.json'):
             files.append(file)
     files.sort()
-    # files = ['global_ipm.json']
+    # files = ['cr21g_custom.json']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     table_schemas = []
     for file in files:

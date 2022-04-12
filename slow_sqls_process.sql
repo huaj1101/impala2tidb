@@ -49,13 +49,43 @@ where hash_id in (
 '10e581ad09509206222b82eab8ae578a',
 '51f9a976d35a6e893ed58d4d7badf72a',
 '2896a8a027d25e9eb1c31b97f6f3e0d3',
-'130b7410b738deeee9c753bc9f09cabb'
+'130b7410b738deeee9c753bc9f09cabb',
+'45b076db3e08528657fff5085379dd6c',
+'5dd7e8ec687f05458b3dbf0ca1ede767',
+'203cd735ab47b11d2a154de0067655ff',
+'8e0a9a5b4fb5ceb204a9f9cfa27fdecc',
+'a235d43f810f4e6d692301f9c29220b4'
 )
 ;
-UPDATE default.slow_sqls 
-SET sql_impala = REPLACE(sql_impala, 'NULLS FIRST', '')
-WHERE sql_impala LIKE '%NULLS FIRST%'
+-- 处理tidb
+UPDATE test.`slow_sqls`
+SET sql_tidb = REPLACE(sql_tidb, 'NULLS FIRST', '')
+WHERE sql_tidb LIKE '%NULLS FIRST%'
 ;
-UPDATE default.slow_sqls 
-SET sql_impala = REPLACE(sql_impala, 'isnull(', 'ifnull(')
-WHERE sql_impala LIKE '%isnull(%'
+UPDATE test.`slow_sqls`
+SET sql_tidb = REPLACE(sql_tidb, 'isnull(', 'ifnull(')
+WHERE sql_tidb LIKE '%isnull(%'
+;
+UPDATE test.`slow_sqls`
+SET sql_tidb = REPLACE(sql_tidb, 'isNull(', 'ifnull(')
+WHERE sql_tidb LIKE '%isNull(%'
+;
+UPDATE test.`slow_sqls`
+SET sql_tidb = REPLACE(sql_tidb, '--', '-- ')
+WHERE sql_tidb LIKE '%--%'
+;
+UPDATE test.`slow_sqls` 
+SET db = 'global_platform'
+WHERE db = 'default'
+;
+UPDATE test.`slow_sqls` 
+SET sql_tidb = REPLACE(sql_tidb, 'global_dw.', 'global_dw_1.')
+WHERE sql_tidb LIKE '%global_dw.%'
+;
+UPDATE test.`slow_sqls` 
+SET sql_tidb = REPLACE(sql_tidb, 'cast ', 'cast')
+WHERE sql_tidb LIKE '%cast %'
+;
+UPDATE test.`slow_sqls`
+SET sql_tidb = REPLACE(sql_tidb, 'nullvalue(', 'isnull(')
+WHERE sql_tidb LIKE '%nullvalue(%'

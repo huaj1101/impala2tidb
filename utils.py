@@ -1,5 +1,6 @@
 import configparser
 import impala.dbapi
+from pymysql import paramstyle
 import sqlalchemy
 import logging
 import sys

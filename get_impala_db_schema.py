@@ -38,20 +38,18 @@ def get_pk_unique_subset(db, table, pk, cursor):
         return new_keys
     return pk
 
-def get_table_schema(db, table, cursor):
-    cursor.execute(f'describe {db}.{table}')
-    df = as_pandas(cursor)
+def get_table_schema_kudu(db, table, cursor, df_columns):
     primary_keys = []
     columns = []
     str_columns = []
-    for i in range(len(df)):
-        name = f'`{df.at[i, "name"]}`'
-        type = df.at[i, 'type']
+    for i in range(len(df_columns)):
+        name = f'`{df_columns.at[i, "name"]}`'
+        type = df_columns.at[i, 'type']
         if type == 'string':
             str_columns.append(name)
-        nullable = df.at[i, 'nullable']
-        default_value = df.at[i, 'default_value']
-        primary_key = df.at[i, 'primary_key']
+        nullable = df_columns.at[i, 'nullable']
+        default_value = df_columns.at[i, 'default_value']
+        primary_key = df_columns.at[i, 'primary_key']
         if primary_key == 'true':
             primary_keys.append(name)
         column_schema = {
@@ -65,10 +63,10 @@ def get_table_schema(db, table, cursor):
     if str_columns:
         sql = f'select {",".join([f"ifnull(max(length({col})), 0) as {col}" for col in str_columns])} from {db}.{table}'
         utils.exec_sql(cursor, sql)
-        df = as_pandas(cursor)
-        for i in range(len(df.columns)):
-            name = df.columns[i]
-            value = df.at[0, name]
+        df_columns = as_pandas(cursor)
+        for i in range(len(df_columns.columns)):
+            name = df_columns.columns[i]
+            value = df_columns.at[0, name]
             name = f'`{name}`'
             for cs in columns:
                 if cs['name'] == name:
@@ -81,10 +79,65 @@ def get_table_schema(db, table, cursor):
         #         error_columns.append(f'{db}.{table}.{col}')
     return {
         'table': f'`{db}`.`{table}`', 
+        'type': 'parquet',
         'columns': columns,
         'primary_keys': ','.join(primary_keys),
         'pk_unique_subset': ','.join(get_pk_unique_subset(db, table, primary_keys, cursor))
         }
+
+def get_table_schema_parquet(db, table, cursor, df_columns):
+    columns = []
+    # str_columns = []
+    for i in range(len(df_columns)):
+        name = f'`{df_columns.at[i, "name"]}`'
+        type = df_columns.at[i, 'type']
+        length = 0
+        if type == 'string':
+            length = 1000
+            # str_columns.append(name)
+        column_schema = {
+            'name': name,
+            'type': type,
+            'len': length,
+            'nullable': True,
+            'default_value': ""
+        }
+        columns.append(column_schema)
+    tenant_column = None
+    for cs in columns:
+        if cs['name'] == '`tenant`':
+            tenant_column = cs
+            break
+    if tenant_column:
+        tenant_column['len'] = 50
+        columns.remove(tenant_column)
+        columns.insert(0, tenant_column)
+    # if str_columns:
+    #     sql = f'select {",".join([f"ifnull(max(length({col})), 0) as {col}" for col in str_columns])} from {db}.{table}'
+    #     utils.exec_sql(cursor, sql)
+    #     df_columns = as_pandas(cursor)
+    #     for i in range(len(df_columns.columns)):
+    #         name = df_columns.columns[i]
+    #         value = df_columns.at[0, name]
+    #         name = f'`{name}`'
+    #         for cs in columns:
+    #             if cs['name'] == name:
+    #                 cs['len'] = int(value)
+    return {
+        'table': f'`{db}`.`{table}`', 
+        'type': 'kudu',
+        'columns': columns,
+        'primary_keys': '',
+        'pk_unique_subset': ''
+        }
+
+def get_table_schema(db, table, cursor):
+    cursor.execute(f'describe {db}.{table}')
+    df = as_pandas(cursor)
+    if len(df.columns) == 3:
+        return get_table_schema_parquet(db, table, cursor, df)
+    else:
+        return get_table_schema_kudu(db, table, cursor, df)
 
 @utils.thread_method
 def get_db_schema(db, total_count):
@@ -111,7 +164,7 @@ def get_db_schema(db, total_count):
 @utils.timeit
 def main():
     dbs = utils.get_impala_dbs()
-    # dbs = ['global_ipm']
+    # dbs = ['cr21g_custom']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for db in dbs:
         pool.submit(get_db_schema, db, len(dbs))

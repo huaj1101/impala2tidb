@@ -95,6 +95,7 @@ def compare_one_table_schema(table: TableInfo, total_count):
         thread_context.tidb_conn = thread_context.tidb_engine.connect()
 
     sql = f'describe {table.full_name}'
+    
     thread_context.impala_cursor.execute(sql)
     df_impala = as_pandas(thread_context.impala_cursor)
     if len(df_impala.columns) == 3:
@@ -160,7 +161,6 @@ def compare_one_table_data(table: TableInfo, total_count):
     if not hasattr(thread_context, 'tidb_conn'):
         thread_context.tidb_engine = utils.get_tidb_engine()
         thread_context.tidb_conn = thread_context.tidb_engine.connect()
-
     # check record count
     sql = f'select count(*) as cnt from {table.db}.`{table.table}`'
     utils.exec_sql(thread_context.impala_cursor, sql)
@@ -231,11 +231,12 @@ def main():
         logger.error('dbs mismatch')
         return
     # 比较表是否匹配
-    # dbs_impala = ['global_mtlp']
+    # dbs_impala = ['cr21g_custom']
     compare_tables(dbs_impala)
     if mismatch: 
         logger.error('tables mismatch')
         return
+
     # 比较每张表的schema
     compare_tables_schema()
     if mismatch: 

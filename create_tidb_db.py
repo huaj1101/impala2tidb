@@ -62,6 +62,8 @@ def translate_type(impala_type, length):
 def translate_default_value(tidb_type, default_value):
     if default_value and tidb_type.startswith('varchar'):
         default_value = f'"{default_value}"'
+    elif tidb_type == 'datetime':
+        return ''
     return default_value
 
 
@@ -81,7 +83,10 @@ def create_one_table(table_schema, tidb_conn):
         default_statment = '' if default_value == '' else f'default {default_value}'
         column_statement = f'\t{col_name: <25s}{col_type: <40s}{null_statment: <15s}{default_statment: <20s},'
         create_sql_lines.append(column_statement)
-    create_sql_lines.append(f'\tPRIMARY KEY ({primary_keys}) /*T![clustered_index] CLUSTERED */')
+    if primary_keys:
+        create_sql_lines.append(f'\tPRIMARY KEY ({primary_keys}) /*T![clustered_index] CLUSTERED */')
+    else:
+        create_sql_lines[-1] = create_sql_lines[-1].strip(',')
     create_sql_lines.append(')')
     tidb_conn.execute('\n'.join(create_sql_lines))
     tidb_conn.execute(f'ALTER TABLE {table_name} SET TIFLASH REPLICA 3')
@@ -112,7 +117,7 @@ def main():
         if file.endswith('.json'):
             files.append(file)
     files.sort()
-    # files = ['crssg_custom.json']
+    # files = ['cr21g_custom.json']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for file in files:
         db = file.replace('.json', '')

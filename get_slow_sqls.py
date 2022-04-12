@@ -9,6 +9,8 @@ from concurrent.futures import ThreadPoolExecutor
 import utils
 import json
 import re
+import pandas as pd
+import pymysql
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +71,27 @@ def insert_into_tidb():
     df.to_sql('slow_sqls', tidb_conn, 'test', if_exists='append', index=False)
     print(f'{len(df)} inserted to tidb test.slow_sqls')
 
+# 处理cast(xxx as string)
+def process_tidb_sql_1():
+    engine = utils.get_tidb_engine()
+    tidb_conn = engine.connect()
+    
+    
+    df = pd.read_sql_query("SELECT id, sql_tidb FROM test.`slow_sqls` WHERE lower(sql_tidb) RLIKE '.*cast\((.+) as string\).*' AND enabled=1", tidb_conn)
+    # print(len(df))
+    for i in range(len(df)):
+        id = df.at[i, 'id']
+        tidb_sql = df.at[i, 'sql_tidb']
+        tidb_sql = re.sub('cast\((.+?) as string\)', 'concat(\\1)', tidb_sql, flags=re.I)
+        tidb_sql = pymysql.escape_string(tidb_sql)  
+        # logger.info(tidb_sql)
+        sql =f'update test.slow_sqls set sql_tidb = "{tidb_sql}" where id = {id}'
+        tidb_conn.execute(sql)
+        print(f'{i+1}/{len(df)}')
+
+    
+
 if __name__ == '__main__':
     # insert_into_impala()
-    insert_into_tidb()
+    # insert_into_tidb()
+    process_tidb_sql_1()
