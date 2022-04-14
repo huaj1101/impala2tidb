@@ -79,7 +79,7 @@ def get_table_schema_kudu(db, table, cursor, df_columns):
         #         error_columns.append(f'{db}.{table}.{col}')
     return {
         'table': f'`{db}`.`{table}`', 
-        'type': 'parquet',
+        'type': 'kudu',
         'columns': columns,
         'primary_keys': ','.join(primary_keys),
         'pk_unique_subset': ','.join(get_pk_unique_subset(db, table, primary_keys, cursor))
@@ -125,7 +125,7 @@ def get_table_schema_parquet(db, table, cursor, df_columns):
     #                 cs['len'] = int(value)
     return {
         'table': f'`{db}`.`{table}`', 
-        'type': 'kudu',
+        'type': 'parquet',
         'columns': columns,
         'primary_keys': '',
         'pk_unique_subset': ''
@@ -164,7 +164,7 @@ def get_db_schema(db, total_count):
 @utils.timeit
 def main():
     dbs = utils.get_impala_dbs()
-    # dbs = ['cr21g_custom']
+    # dbs = ['global_dwb', 'global_dw_1', 'global_dw_2', 'dp_stat']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for db in dbs:
         pool.submit(get_db_schema, db, len(dbs))

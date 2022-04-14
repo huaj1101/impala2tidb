@@ -38,7 +38,7 @@ def translate_type(impala_type, length):
         if tidb_len <= 16383:
             tidb_type = f'varchar({tidb_len}) character set utf8mb4'
         elif tidb_len <= 65535:
-            tidb_type = 'text character set utf8mb4'
+            tidb_type = f'text({tidb_len}) character set utf8mb4'
         else:
             tidb_type = 'longtext character set utf8mb4'
     elif impala_type == 'bigint':
@@ -63,6 +63,8 @@ def translate_default_value(tidb_type, default_value):
     if default_value and tidb_type.startswith('varchar'):
         default_value = f'"{default_value}"'
     elif tidb_type == 'datetime':
+        return ''
+    elif tidb_type.startswith('text'):
         return ''
     return default_value
 
@@ -117,7 +119,7 @@ def main():
         if file.endswith('.json'):
             files.append(file)
     files.sort()
-    # files = ['cr21g_custom.json']
+    # files = ['global_dwb.json']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for file in files:
         db = file.replace('.json', '')

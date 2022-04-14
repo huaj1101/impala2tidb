@@ -25,7 +25,7 @@ def get_table_data(table_schema, total_count):
     db = table_schema['table'].split('.')[0].strip('`')
     text_db = db + '_text'
     table = table_schema['table'].split('.')[1].strip('`')
-    # if table != 'component': 
+    # if table_schema['type'] == 'kudu':
     #     return
     cursor = utils.get_impala_cursor()
     lock.acquire()
@@ -37,10 +37,11 @@ def get_table_data(table_schema, total_count):
     lock.release()
 
     # 拷贝到textfile格式的表中（以便产生csv）
+    cols = [col['name'] for col in table_schema['columns']]
     sql = f'create table {text_db}.{table} ' +\
         'ROW FORMAT DELIMITED FIELDS TERMINATED BY "\u0006" ESCAPED BY "\\\\" LINES TERMINATED BY "\u0007" ' +\
         'stored as textfile ' +\
-        f'as select * from {db}.{table}'
+        f'as select {", ".join(cols)} from {db}.{table}'
     utils.exec_sql(cursor, sql)
     cursor.execute(f'refresh {text_db}.{table}')
     cursor.close()
@@ -77,7 +78,7 @@ def main():
         if file.endswith('.json'):
             files.append(file)
     files.sort()
-    # files = ['cr21g_custom.json']
+    # files = ['global_dw_1.json', 'global_dw_2.json']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     table_schemas = []
     for file in files:

@@ -59,32 +59,33 @@ def get_impala_cursor_prod():
     cursor = conn.cursor()
     return cursor
 
-def filter_db(db):
+def filter_biz_db(db):
     special_dbs = ['public_data']
-    ignore_dbs = ['global_dw_1', 'global_dw_2', 'global_dwb']
+    ignore_dbs = []
+    # ignore_dbs = ['global_dw_1', 'global_dw_2', 'global_dwb']
     return db not in ignore_dbs and not db.endswith('_text') and \
         (db.startswith('global_') or db.startswith('asset_') or db.endswith('_custom') or db in special_dbs)
 
-def get_impala_dbs():
+def get_impala_dbs(filter=filter_biz_db):
     cursor = get_impala_cursor()
     cursor.execute('show databases')
     dbs = []
     df = as_pandas(cursor)
     for i in range(len(df)):
         db = df.at[i, 'name']
-        if filter_db(db):
+        if filter == None or filter(db):
             dbs.append(db)
     cursor.close()
     return dbs
 
-def get_tidb_dbs():
+def get_tidb_dbs(filter=filter_biz_db):
     engine = get_tidb_engine()
     conn = engine.connect()
     df = pd.read_sql_query('show databases', conn)
     dbs = []
     for i in range(len(df)):
         db = df.at[i, 'Database']
-        if filter_db(db):
+        if filter == None or filter(db):
             dbs.append(db)
     conn.close()
     return dbs

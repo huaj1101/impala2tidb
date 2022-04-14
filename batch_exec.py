@@ -78,7 +78,7 @@ def run(engine, action):
         if file.endswith('.json'):
             files.append(file)
     files.sort()
-    # files = ['crssg_custom.json']
+    # files = ['global_dw_1.json', 'global_dw_2.json']
     tables_schema = []
     for file in files:
         with open(f'schemas/{file}', 'r', encoding='utf-8') as f:
