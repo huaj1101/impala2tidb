@@ -25,7 +25,7 @@ def get_table_data(table_schema, total_count):
     db = table_schema['table'].split('.')[0].strip('`')
     text_db = db + '_text'
     table = table_schema['table'].split('.')[1].strip('`')
-    # if table_schema['type'] == 'kudu':
+    # if table != 'progress_item':
     #     return
     cursor = utils.get_impala_cursor()
     lock.acquire()
@@ -37,7 +37,13 @@ def get_table_data(table_schema, total_count):
     lock.release()
 
     # 拷贝到textfile格式的表中（以便产生csv）
-    cols = [col['name'] for col in table_schema['columns']]
+    cols = []
+    for col in table_schema['columns']:
+        col_name = col["name"]
+        if col['type'] == 'boolean':
+            cols.append(f'cast({col_name} as int) as {col_name}')
+        else:
+            cols.append(col_name)
     sql = f'create table {text_db}.{table} ' +\
         'ROW FORMAT DELIMITED FIELDS TERMINATED BY "\u0006" ESCAPED BY "\\\\" LINES TERMINATED BY "\u0007" ' +\
         'stored as textfile ' +\
@@ -78,7 +84,7 @@ def main():
         if file.endswith('.json'):
             files.append(file)
     files.sort()
-    # files = ['global_dw_1.json', 'global_dw_2.json']
+    # files = ['global_ipm.json']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     table_schemas = []
     for file in files:

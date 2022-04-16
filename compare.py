@@ -231,7 +231,7 @@ def main():
         logger.error('dbs mismatch')
         return
     # 比较表是否匹配
-    # dbs_impala = ['cr21g_custom']
+    # dbs_impala = ['global_platform']
     compare_tables(dbs_impala)
     if mismatch: 
         logger.error('tables mismatch')
