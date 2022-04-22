@@ -63,7 +63,7 @@ def filter_biz_db(db):
     special_dbs = ['public_data']
     ignore_dbs = []
     # ignore_dbs = ['global_dw_1', 'global_dw_2', 'global_dwb']
-    return db not in ignore_dbs and not db.endswith('_text') and \
+    return not db.startswith('___') and db not in ignore_dbs and not db.endswith('_text') and \
         (db.startswith('global_') or db.startswith('asset_') or db.endswith('_custom') or db in special_dbs)
 
 def get_impala_dbs(filter=filter_biz_db):

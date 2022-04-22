@@ -32,7 +32,7 @@ def get_table_data(table_schema, total_count):
     if text_db not in dbs_created:
         cursor.execute(f'drop database if exists {text_db} cascade')
         cursor.execute(f'create database {text_db}')
-        time.sleep(2)
+        time.sleep(5)
         dbs_created.add(text_db)
     lock.release()
 
@@ -50,9 +50,9 @@ def get_table_data(table_schema, total_count):
         f'as select {", ".join(cols)} from {db}.{table}'
     utils.exec_sql(cursor, sql)
     cursor.execute(f'refresh {text_db}.{table}')
-    cursor.close()
 
     # 拷贝csv到本地
+    copy_start = time.time()
     hdfs_path = f'/user/hive/warehouse/{text_db}.db/{table}'
     csv_files = []
     for item in thread_context.hdfsclient.list(hdfs_path):
@@ -63,9 +63,12 @@ def get_table_data(table_schema, total_count):
         hdfs_file = f'/user/hive/warehouse/{text_db}.db/{table}/{file}'
         local_file = f'data/{db}.{table}.{i+1:0>3d}.csv'
         thread_context.hdfsclient.download(hdfs_file, local_file, overwrite=True)
+    
+    # 时间长了cursor可能会超时关闭，重新创建一个
+    if time.time() - copy_start > 10:
+        cursor = utils.get_impala_cursor()
 
     # 删除textfile表（节省空间）
-    cursor = utils.get_impala_cursor()
     cursor.execute(f'drop table {text_db}.{table} PURGE')
     cursor.close()
 
