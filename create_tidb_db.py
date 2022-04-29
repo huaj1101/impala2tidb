@@ -63,6 +63,8 @@ def translate_default_value(tidb_type, default_value):
     if default_value and tidb_type.startswith('varchar'):
         default_value = f'"{default_value}"'
     elif tidb_type == 'datetime':
+        if default_value == '0':
+            return '"1970-01-01"'
         return ''
     elif tidb_type.startswith('text'):
         return ''
@@ -119,7 +121,7 @@ def main():
         if file.endswith('.json'):
             files.append(file)
     files.sort()
-    # files = ['global_dwb.json']
+    files = ['global_dwb.json']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for file in files:
         db = file.replace('.json', '')
