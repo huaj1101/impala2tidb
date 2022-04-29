@@ -100,8 +100,7 @@ def create_one_table(table_schema, tidb_conn):
 def create_one_db(db, db_schema, total_count):
     start = time.time()
     if not hasattr(thread_context, 'tidb_conn'):
-        thread_context.tidb_engine = utils.get_tidb_engine()
-        thread_context.tidb_conn = thread_context.tidb_engine.connect()
+        thread_context.tidb_conn = utils.get_tidb_conn()
     thread_context.tidb_conn.execute(f'DROP DATABASE IF EXISTS {db}')
     thread_context.tidb_conn.execute(f'CREATE DATABASE {db}')
     for table_schema in db_schema:

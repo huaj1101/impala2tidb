@@ -32,7 +32,7 @@ def get_pk_unique_subset(db, table, pk, cursor):
     else:
         new_keys = pk
     sql = f'SELECT count(*) FROM {db}.{table} group by {",".join(new_keys)} having count(*) > 1 limit 1'
-    utils.exec_sql(cursor, sql)
+    utils.exec_impala_sql(cursor, sql)
     df = as_pandas(cursor)
     if len(df) == 0:
         return new_keys
@@ -62,7 +62,7 @@ def get_table_schema_kudu(db, table, cursor, df_columns):
         columns.append(column_schema)
     if str_columns:
         sql = f'select {",".join([f"ifnull(max(length({col})), 0) as {col}" for col in str_columns])} from {db}.{table}'
-        utils.exec_sql(cursor, sql)
+        utils.exec_impala_sql(cursor, sql)
         df_columns = as_pandas(cursor)
         for i in range(len(df_columns.columns)):
             name = df_columns.columns[i]

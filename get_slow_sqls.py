@@ -62,20 +62,17 @@ order by created_at, hash_id
 
 def insert_into_tidb():
     cursor = utils.get_impala_cursor()
-    utils.exec_sql(cursor, 'select * from default.slow_sqls')
+    utils.exec_impala_sql(cursor, 'select * from default.slow_sqls')
     df = as_pandas(cursor)
     print(f'{len(df)} loaded from impala default.slow_sqls')
     cursor.close()
-    engine = utils.get_tidb_engine()
-    tidb_conn = engine.connect()
-    df.to_sql('slow_sqls', tidb_conn, 'test', if_exists='append', index=False)
+    with utils.get_tidb_conn() as tidb_conn:
+        df.to_sql('slow_sqls', tidb_conn, 'test', if_exists='append', index=False)
     print(f'{len(df)} inserted to tidb test.slow_sqls')
 
 # 处理cast(xxx as string)
 def process_tidb_sql_1():
-    engine = utils.get_tidb_engine()
-    tidb_conn = engine.connect()
-    
+    tidb_conn = utils.get_tidb_conn()
     
     df = pd.read_sql_query("SELECT id, sql_tidb FROM test.`slow_sqls` WHERE lower(sql_tidb) RLIKE '.*cast\((.+) as string\).*' AND enabled=1", tidb_conn)
     # print(len(df))

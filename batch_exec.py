@@ -14,18 +14,15 @@ import json
 
 logger = logging.getLogger(__name__)
 
-thread_context = threading.local()
 sql_times = {}
 lock = threading.Lock()
 finish_count = 0
 
 @utils.thread_method
 def truncate_table_tidb(table_schema, total_count):
-    if not hasattr(thread_context, 'tidb_conn'):
-        thread_context.tidb_engine = utils.get_tidb_engine()
-        thread_context.tidb_conn = thread_context.tidb_engine.connect()
     sql = f'truncate {table_schema["table"]}'
-    thread_context.tidb_conn.execute(sql)
+    with utils.get_tidb_conn() as conn:
+        conn.execute(sql)
     
     global finish_count
     lock.acquire()
@@ -36,11 +33,9 @@ def truncate_table_tidb(table_schema, total_count):
 
 @utils.thread_method
 def analyze_table_tidb(table_schema, total_count):
-    if not hasattr(thread_context, 'tidb_conn'):
-        thread_context.tidb_engine = utils.get_tidb_engine()
-        thread_context.tidb_conn = thread_context.tidb_engine.connect()
     sql = f'ANALYZE TABLE {table_schema["table"]}'
-    thread_context.tidb_conn.execute(sql)
+    with utils.get_tidb_conn() as conn:
+        conn.execute(sql)
     
     global finish_count
     lock.acquire()
@@ -51,10 +46,9 @@ def analyze_table_tidb(table_schema, total_count):
 
 @utils.thread_method
 def analyze_table_impala(table_schema, total_count):
-    if not hasattr(thread_context, 'cursor'):
-        thread_context.cursor = utils.get_impala_cursor()
     sql = f'compute stats {table_schema["table"]}'
-    thread_context.cursor.execute(sql)
+    with utils.get_impala_cursor() as cursor:
+        cursor.execute(sql)
     
     global finish_count
     lock.acquire()

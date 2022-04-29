@@ -37,14 +37,33 @@ logging.getLogger('impala').setLevel('ERROR')
 logger = logging.getLogger(__name__)
 thread_count = conf.getint('sys', 'threads', fallback=1)
 
-def get_tidb_engine():
-    host = conf.get('tidb', 'host')
-    port = conf.get('tidb', 'port')
-    user = conf.get('tidb', 'user')
-    pwd = conf.get('tidb', 'pwd')
-    db = conf.get('tidb', 'db')
-    con_str = f'mysql+mysqldb://{user}:{pwd}@{host}:{port}/{db}?charset=utf8'
-    return sqlalchemy.create_engine(con_str)
+_tidb_engine = None
+def get_tidb_conn():
+    global _tidb_engine
+    if _tidb_engine is None:
+        host = conf.get('tidb', 'host')
+        port = conf.get('tidb', 'port')
+        user = conf.get('tidb', 'user')
+        pwd = conf.get('tidb', 'pwd')
+        db = conf.get('tidb', 'db')
+        con_str = f'mysql+mysqldb://{user}:{pwd}@{host}:{port}/{db}?charset=utf8'
+        _tidb_engine = sqlalchemy.create_engine(con_str)
+    return _tidb_engine.connect()
+
+def _pre_process_tidb_sql(sql):
+    sql = sql.replace(r'%', r'%%')
+    return sql
+
+def exec_tidb_sql(conn: sqlalchemy.engine.Connection, sql: str):
+    sql = _pre_process_tidb_sql(sql)
+    # logger.info(sql)
+    conn.execute(sql)
+
+def get_tidb_data(conn: sqlalchemy.engine.Connection, sql: str):
+    sql = _pre_process_tidb_sql(sql)
+    # logger.info(sql)
+    return pd.read_sql_query(sql, conn)
+
 
 def get_impala_cursor():
     conn = impala.dbapi.connect(host=conf.get('impala', 'host'), port=conf.getint('impala', 'port'), database=conf.get('impala', 'db'), 
@@ -105,7 +124,7 @@ def get_tables_in_tidb_db(db, conn):
         tables.append(df.at[i, f'Tables_in_{db}'])
     return tables
 
-def exec_sql(cursor, sql, query_options=None):
+def exec_impala_sql(cursor, sql, query_options=None):
     sql = "/*& global:true */ \n" + sql
     # 极少数时候会出现偶发异常：[Errno 104] Connection reset by peer
     # 加入一次重试

@@ -52,8 +52,7 @@ def compare_tables_in_one_db(db, total_count):
     if not hasattr(thread_context, 'impala_cursor'):
         thread_context.impala_cursor = utils.get_impala_cursor()
     if not hasattr(thread_context, 'tidb_conn'):
-        thread_context.tidb_engine = utils.get_tidb_engine()
-        thread_context.tidb_conn = thread_context.tidb_engine.connect()
+        thread_context.tidb_conn = utils.get_tidb_conn()
     tables_impala = utils.get_tables_in_impala_db(db, thread_context.impala_cursor)
     tables_tidb = utils.get_tables_in_tidb_db(db, thread_context.tidb_conn)
     # print(len(tables_impala))
@@ -91,8 +90,7 @@ def compare_one_table_schema(table: TableInfo, total_count):
     if not hasattr(thread_context, 'impala_cursor'):
         thread_context.impala_cursor = utils.get_impala_cursor()
     if not hasattr(thread_context, 'tidb_conn'):
-        thread_context.tidb_engine = utils.get_tidb_engine()
-        thread_context.tidb_conn = thread_context.tidb_engine.connect()
+        thread_context.tidb_conn = utils.get_tidb_conn()
 
     sql = f'describe {table.full_name}'
     
@@ -159,11 +157,10 @@ def compare_one_table_data(table: TableInfo, total_count):
     if not hasattr(thread_context, 'impala_cursor'):
         thread_context.impala_cursor = utils.get_impala_cursor()
     if not hasattr(thread_context, 'tidb_conn'):
-        thread_context.tidb_engine = utils.get_tidb_engine()
-        thread_context.tidb_conn = thread_context.tidb_engine.connect()
+        thread_context.tidb_conn = utils.get_tidb_conn()
     # check record count
     sql = f'select count(*) as cnt from {table.db}.`{table.table}`'
-    utils.exec_sql(thread_context.impala_cursor, sql)
+    utils.exec_impala_sql(thread_context.impala_cursor, sql)
     df_impala = as_pandas(thread_context.impala_cursor)
     cnt_impala = df_impala.at[0, 'cnt']
 
@@ -193,7 +190,7 @@ def compare_field_max_value(impala_cursor, tidb_conn, table: TableInfo, field, i
         sql_impala = f'select max(cast(round(cast({field} as double)) as TIMESTAMP)) as max_value from {table.db}.`{table.table}`'
     else:
         sql_impala = f'select max({field}) as max_value from {table.db}.`{table.table}`'
-    utils.exec_sql(impala_cursor, sql_impala)
+    utils.exec_impala_sql(impala_cursor, sql_impala)
     df_impala = as_pandas(impala_cursor)
     impala_value = df_impala.at[0, 'max_value']
 

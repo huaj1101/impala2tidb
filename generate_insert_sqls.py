@@ -17,9 +17,9 @@ def cell_to_str(cellvalue, type):
 
 def gen_insert_sql(table, sql):
     cursor = utils.get_impala_cursor()
-    utils.exec_sql(cursor, f'describe {table}')
+    utils.exec_impala_sql(cursor, f'describe {table}')
     df_schema = as_pandas(cursor)
-    utils.exec_sql(cursor, sql)
+    utils.exec_impala_sql(cursor, sql)
     df_data = as_pandas(cursor)
 
     cols = []

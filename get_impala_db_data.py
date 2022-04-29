@@ -48,7 +48,7 @@ def get_table_data(table_schema, total_count):
         'ROW FORMAT DELIMITED FIELDS TERMINATED BY "\u0006" ESCAPED BY "\\\\" LINES TERMINATED BY "\u0007" ' +\
         'stored as textfile ' +\
         f'as select {", ".join(cols)} from {db}.{table}'
-    utils.exec_sql(cursor, sql)
+    utils.exec_impala_sql(cursor, sql)
     cursor.execute(f'refresh {text_db}.{table}')
 
     # 拷贝csv到本地
