@@ -31,7 +31,16 @@ def get_sql_text(query_id):
     return tenant, db, impala_sql, tidb_sql
 
 def test_one(conn, cursor, query_id, impala_start_time, impala_duration):
-    tenant, db, impala_sql, tidb_sql = get_sql_text(query_id)
+    try:
+        # 接口不稳定，偶发报错，跳过
+        tenant, db, impala_sql, tidb_sql = get_sql_text(query_id)
+        # 带有_parquet_的sql，是备份库产生的，忽略
+        if '_parquet_' in impala_sql:
+            sql = f'update dp_stat.impala_query_log set processed = true where query_id = "{query_id}"'
+            utils.exec_impala_sql(cursor, sql)
+            return
+    except:
+        return
     try:
         err_msg = ''
         duration = 0
@@ -71,7 +80,11 @@ def test_batch():
     return len(df) > 0
 
 def re_run_error_sql(conn, id, query_id):
-    tenant, db, impala_sql, tidb_sql = get_sql_text(query_id)
+    try:
+        # 接口不稳定，偶发报错，跳过
+        tenant, db, impala_sql, tidb_sql = get_sql_text(query_id)
+    except:
+        return
     try:
         err_msg = ''
         duration = 0
@@ -93,7 +106,7 @@ def re_run_error_sql(conn, id, query_id):
 def re_run_error_sql_batch(start_id=0):
     batch_size = 100
     conn = utils.get_tidb_conn()
-    sql = f'select id, query_id from test.`translate_test` where success=0 and id > {start_id} order by id limit {batch_size}'
+    sql = f'select id, query_id from test.`translate_test` where success=0 and not_support=0 and id > {start_id} order by id limit {batch_size}'
     df = utils.get_tidb_data(conn, sql)
     logger.info(f'get {len(df)} sqls')
     last_id = 0
@@ -104,11 +117,11 @@ def re_run_error_sql_batch(start_id=0):
     return last_id
 
 def main():
-    # while test_batch():
-    #     pass
-    last_id = re_run_error_sql_batch()
-    while last_id > 0:
-        last_id = re_run_error_sql_batch(last_id)
+    while test_batch():
+        pass
+    # last_id = re_run_error_sql_batch()
+    # while last_id > 0:
+    #     last_id = re_run_error_sql_batch(last_id)
 
 if __name__ == '__main__':
     main()
