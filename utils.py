@@ -46,7 +46,7 @@ def get_tidb_conn():
         user = conf.get('tidb', 'user')
         pwd = conf.get('tidb', 'pwd')
         db = conf.get('tidb', 'db')
-        con_str = f'mysql+mysqldb://{user}:{pwd}@{host}:{port}/{db}?charset=utf8'
+        con_str = f'mysql+pymysql://{user}:{pwd}@{host}:{port}/{db}?charset=utf8'
         _tidb_engine = sqlalchemy.create_engine(con_str)
     return _tidb_engine.connect()
 
@@ -98,8 +98,7 @@ def get_impala_dbs(filter=filter_biz_db):
     return dbs
 
 def get_tidb_dbs(filter=filter_biz_db):
-    engine = get_tidb_engine()
-    conn = engine.connect()
+    conn = get_tidb_conn()
     df = pd.read_sql_query('show databases', conn)
     dbs = []
     for i in range(len(df)):

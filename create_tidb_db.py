@@ -92,9 +92,10 @@ def create_one_table(table_schema, tidb_conn):
     else:
         create_sql_lines[-1] = create_sql_lines[-1].strip(',')
     create_sql_lines.append(')')
+    sql = '\n'.join(create_sql_lines)
+    # print(sql)
     tidb_conn.execute('\n'.join(create_sql_lines))
     tidb_conn.execute(f'ALTER TABLE {table_name} SET TIFLASH REPLICA 3')
-    # print('\n'.join(create_sql_lines))
 
 @utils.thread_method
 def create_one_db(db, db_schema, total_count):
@@ -104,6 +105,8 @@ def create_one_db(db, db_schema, total_count):
     thread_context.tidb_conn.execute(f'DROP DATABASE IF EXISTS {db}')
     thread_context.tidb_conn.execute(f'CREATE DATABASE {db}')
     for table_schema in db_schema:
+        # if table_schema['type'] != "parquet":
+        #     continue
         create_one_table(table_schema, thread_context.tidb_conn)
         # break
     time_used = time.time() - start
@@ -120,7 +123,7 @@ def main():
         if file.endswith('.json'):
             files.append(file)
     files.sort()
-    files = ['ys2_custom.json']
+    files = ['global_dwb.json', 'global_dw_1.json', 'global_dw_2.json']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for file in files:
         db = file.replace('.json', '')

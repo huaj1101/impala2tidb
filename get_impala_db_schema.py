@@ -99,7 +99,7 @@ def get_table_schema_parquet(db, table, cursor, df_columns):
             'name': name,
             'type': type,
             'len': length,
-            'nullable': True,
+            'nullable': 'true',
             'default_value': ""
         }
         columns.append(column_schema)
@@ -164,7 +164,7 @@ def get_db_schema(db, total_count):
 @utils.timeit
 def main():
     dbs = utils.get_impala_dbs()
-    dbs = ['ys2_custom']
+    dbs = ['global_dwb', 'global_dw_1', 'global_dw_2']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for db in dbs:
         pool.submit(get_db_schema, db, len(dbs))

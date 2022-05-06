@@ -12,6 +12,7 @@ import re
 import pandas as pd
 import pymysql
 import requests
+from pymysql.converters import escape_string
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +31,16 @@ def get_sql_text(query_id):
     # print(tidb_sql)
     return tenant, db, impala_sql, tidb_sql
 
+def mark_not_support(conn, query_id):
+    sql = f'update test.translate_test set not_support=1 where query_id="{query_id}"'
+    utils.exec_tidb_sql(conn, sql)
+
 def test_one(conn, cursor, query_id, impala_start_time, impala_duration):
     try:
         # 接口不稳定，偶发报错，跳过
         tenant, db, impala_sql, tidb_sql = get_sql_text(query_id)
-        # 带有_parquet_的sql，是备份库产生的，忽略
-        if '_parquet_' in impala_sql:
+        # 忽略一些sql
+        if '_parquet_' in impala_sql or db == 'ai':
             sql = f'update dp_stat.impala_query_log set processed = true where query_id = "{query_id}"'
             utils.exec_impala_sql(cursor, sql)
             return
@@ -47,6 +52,8 @@ def test_one(conn, cursor, query_id, impala_start_time, impala_duration):
         if db != 'default':
             utils.exec_tidb_sql(conn, f'use {db}')
         start = time.time()
+        logger.info(query_id)
+        logger.info(tidb_sql)
         utils.exec_tidb_sql(conn, tidb_sql)
         duration = time.time() - start
     except Exception as e:
@@ -54,14 +61,19 @@ def test_one(conn, cursor, query_id, impala_start_time, impala_duration):
         logger.error(f'{query_id} error')
     
     sql = 'insert into test.translate_test (query_id, tenant, db, impala_start_time, impala_sql, impala_duration, tidb_sql, tidb_duration, success, err_msg)' +\
-        f'values("{query_id}", "{tenant}", "{db}", "{impala_start_time}", "{pymysql.escape_string(impala_sql)}", \
-                 {impala_duration}, "{pymysql.escape_string(tidb_sql)}", {duration}, {0 if err_msg else 1}, \
-                 "{pymysql.escape_string(err_msg)}")'
+        f'values("{query_id}", "{tenant}", "{db}", "{impala_start_time}", "{escape_string(impala_sql)}", \
+                 {impala_duration}, "{escape_string(tidb_sql)}", {duration}, {0 if err_msg else 1}, \
+                 "{escape_string(err_msg)}")'
     # logger.error(sql)
     utils.exec_tidb_sql(conn, sql)
 
     sql = f'update dp_stat.impala_query_log set processed = true where query_id = "{query_id}"'
     utils.exec_impala_sql(cursor, sql)
+
+    err_msg_lower = err_msg.lower()
+    if 'duplicate entry' in err_msg_lower and 'insert into' in err_msg_lower:
+        mark_not_support(conn, query_id)           
+
 
 def test_batch():
     batch_size = 100
@@ -84,7 +96,7 @@ def re_run_error_sql(conn, id, query_id):
         # 接口不稳定，偶发报错，跳过
         tenant, db, impala_sql, tidb_sql = get_sql_text(query_id)
     except:
-        return
+        return False
     try:
         err_msg = ''
         duration = 0
@@ -98,30 +110,54 @@ def re_run_error_sql(conn, id, query_id):
         err_msg = str(e)
         logger.error(f'{query_id} still error')
     
-    sql = f'update test.translate_test set tidb_sql="{pymysql.escape_string(tidb_sql)}", tidb_duration={duration}, \
-        success = {0 if err_msg else 1}, err_msg="{pymysql.escape_string(err_msg)}" where id={id}'
+    sql = f'update test.translate_test set tidb_sql="{escape_string(tidb_sql)}", tidb_duration={duration}, \
+        success = {0 if err_msg else 1}, err_msg="{escape_string(err_msg)}" where id={id}'
     # logger.error(sql)
     utils.exec_tidb_sql(conn, sql)
+
+    err_msg_lower = err_msg.lower()
+    if 'duplicate entry' in err_msg_lower and 'insert into' in err_msg_lower:
+        mark_not_support(conn, query_id)
+
+    return err_msg == ''   
 
 def re_run_error_sql_batch(start_id=0):
     batch_size = 100
     conn = utils.get_tidb_conn()
-    sql = f'select id, query_id from test.`translate_test` where success=0 and not_support=0 and id > {start_id} order by id limit {batch_size}'
+    sql = f'select id, query_id from test.`translate_error` where id > {start_id} order by id limit {batch_size}'
     df = utils.get_tidb_data(conn, sql)
-    logger.info(f'get {len(df)} sqls')
+    total_count = len(df)
+    success_count = 0
+    if total_count > 0:
+        logger.info(f'get {total_count} sqls')
     last_id = 0
-    for i in range(len(df)):
+    for i in range(total_count):
         last_id = df.at[i, 'id']
         query_id = df.at[i, 'query_id']
-        re_run_error_sql(conn, last_id, query_id)
-    return last_id
+        if re_run_error_sql(conn, last_id, query_id):
+            success_count += 1
+    return last_id, total_count, success_count
 
-def main():
+def run_new():
     while test_batch():
         pass
-    # last_id = re_run_error_sql_batch()
-    # while last_id > 0:
-    #     last_id = re_run_error_sql_batch(last_id)
+
+def run_err():
+    last_id, total_count, success_count = re_run_error_sql_batch()
+    while last_id > 0:
+        last_id, c1, c2 = re_run_error_sql_batch(last_id)
+        total_count += c1
+        success_count += c2
+    logger.error(f'run error sqls finish, {success_count} / {total_count} success now')
+
 
 if __name__ == '__main__':
-    main()
+    verb = ''
+    if len(sys.argv) == 2:
+        verb = sys.argv[1]
+    if verb == 'run_new':
+        run_new()
+    elif verb == 'run_err':
+        run_err()
+    else:
+        logger.error('param shoud be: run_new / run_err')
