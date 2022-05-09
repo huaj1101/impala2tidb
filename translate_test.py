@@ -125,7 +125,9 @@ def re_run_error_sql(conn, id, query_id):
     try:
         # 接口不稳定，偶发报错，跳过
         tenant, db, impala_sql, tidb_sql = get_sql_text(query_id)
-    except:
+    except Exception as e:
+        logger.error(f'api error: {str(e)}')
+        time.sleep(1)
         return False
     try:
         err_msg = ''
@@ -140,6 +142,8 @@ def re_run_error_sql(conn, id, query_id):
         err_msg = str(e)
         logger.error(f'{query_id} still error')
 
+    if len(tidb_sql) > 1e6:
+        tidb_sql = 'sql too large to store here'
     sql = f'update test.translate_test set tidb_sql="{escape_string(tidb_sql)}", tidb_duration={duration}, \
         success = {0 if err_msg else 1}, err_msg="{escape_string(err_msg)}" where id={id}'
     # logger.error(sql)
@@ -152,6 +156,7 @@ def re_run_error_sql(conn, id, query_id):
     return err_msg == ''   
 
 def re_run_error_sql_batch(start_id=0):
+    # logger.info('re_run_error_sql_batch')
     batch_size = 100
     conn = utils.get_tidb_conn()
     sql = f'select id, query_id from test.`translate_error` where id > {start_id} order by id limit {batch_size}'
