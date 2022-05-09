@@ -34,7 +34,11 @@ def get_sql_text(query_id):
     return tenant, db, impala_sql, tidb_sql
 
 def mark_not_support(conn, query_id):
-    sql = f'update test.translate_test set not_support=1 where query_id="{query_id}"'
+    sql = f'update test.translate_test set status="CodeRepairing" where query_id="{query_id}"'
+    utils.exec_tidb_sql(conn, sql)
+
+def mark_ignore(conn, query_id):
+    sql = f'update test.translate_test set status="Ignore" where query_id="{query_id}"'
     utils.exec_tidb_sql(conn, sql)
 
 def count_one(total):
@@ -77,11 +81,15 @@ def test_one(query_id, impala_start_time, impala_duration, total):
         except Exception as e:
             err_msg = str(e)
             logger.error(f'{query_id} error')
-        
+    
+        if len(impala_sql) > 1e6 or len(tidb_sql) > 1e6:
+            impala_sql = tidb_sql = 'sql too large to store here'
         sql = 'insert into test.translate_test (query_id, tenant, db, impala_start_time, impala_sql, impala_duration, tidb_sql, tidb_duration, success, err_msg)' +\
             f'values("{query_id}", "{tenant}", "{db}", "{impala_start_time}", "{escape_string(impala_sql)}", \
                     {impala_duration}, "{escape_string(tidb_sql)}", {duration}, {0 if err_msg else 1}, \
-                    "{escape_string(err_msg)}")'
+                    "{escape_string(err_msg)}")' +\
+                'on duplicate key update tidb_sql=values(tidb_sql), tidb_duration=values(tidb_duration), success=values(success), err_msg=values(err_msg)'
+            
         # logger.error(sql)
         utils.exec_tidb_sql(conn, sql)
 
@@ -89,8 +97,9 @@ def test_one(query_id, impala_start_time, impala_duration, total):
         utils.exec_impala_sql(cursor, sql)
 
         err_msg_lower = err_msg.lower()
-        if ('duplicate entry' in err_msg_lower and 'insert into' in err_msg_lower) or \
-            "'null'" in err_msg_lower:
+        if 'duplicate entry' in err_msg_lower and 'insert into' in err_msg_lower:
+            mark_ignore(conn, query_id)
+        if "'null'" in err_msg_lower:
             mark_not_support(conn, query_id)
         count_one(total)
     finally:
@@ -130,7 +139,7 @@ def re_run_error_sql(conn, id, query_id):
     except Exception as e:
         err_msg = str(e)
         logger.error(f'{query_id} still error')
-    
+
     sql = f'update test.translate_test set tidb_sql="{escape_string(tidb_sql)}", tidb_duration={duration}, \
         success = {0 if err_msg else 1}, err_msg="{escape_string(err_msg)}" where id={id}'
     # logger.error(sql)
@@ -138,7 +147,7 @@ def re_run_error_sql(conn, id, query_id):
 
     err_msg_lower = err_msg.lower()
     if 'duplicate entry' in err_msg_lower and 'insert into' in err_msg_lower:
-        mark_not_support(conn, query_id)
+        mark_ignore(conn, query_id)
 
     return err_msg == ''   
 
