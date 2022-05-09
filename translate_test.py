@@ -15,6 +15,8 @@ import requests
 from pymysql.converters import escape_string
 
 logger = logging.getLogger(__name__)
+lock = threading.Lock()
+finish_count = 0
 
 def get_sql_text(query_id):
     url = f'http://192.168.1.146:9527/raw-sql-by-id?query_id={query_id}'
@@ -35,61 +37,80 @@ def mark_not_support(conn, query_id):
     sql = f'update test.translate_test set not_support=1 where query_id="{query_id}"'
     utils.exec_tidb_sql(conn, sql)
 
-def test_one(conn, cursor, query_id, impala_start_time, impala_duration):
-    try:
-        # 接口不稳定，偶发报错，跳过
-        tenant, db, impala_sql, tidb_sql = get_sql_text(query_id)
-        # 忽略一些sql
-        if '_parquet_' in impala_sql or db == 'ai':
-            sql = f'update dp_stat.impala_query_log set processed = true where query_id = "{query_id}"'
-            utils.exec_impala_sql(cursor, sql)
-            return
-    except:
-        return
-    try:
-        err_msg = ''
-        duration = 0
-        if db != 'default':
-            utils.exec_tidb_sql(conn, f'use {db}')
-        start = time.time()
-        logger.info(query_id)
-        logger.info(tidb_sql)
-        utils.exec_tidb_sql(conn, tidb_sql)
-        duration = time.time() - start
-    except Exception as e:
-        err_msg = str(e)
-        logger.error(f'{query_id} error')
-    
-    sql = 'insert into test.translate_test (query_id, tenant, db, impala_start_time, impala_sql, impala_duration, tidb_sql, tidb_duration, success, err_msg)' +\
-        f'values("{query_id}", "{tenant}", "{db}", "{impala_start_time}", "{escape_string(impala_sql)}", \
-                 {impala_duration}, "{escape_string(tidb_sql)}", {duration}, {0 if err_msg else 1}, \
-                 "{escape_string(err_msg)}")'
-    # logger.error(sql)
-    utils.exec_tidb_sql(conn, sql)
+def count_one(total):
+    global finish_count
+    lock.acquire()
+    finish_count += 1
+    if finish_count % 10 == 0:
+        logger.info(' %d / %d finish' % (finish_count, total))
+    lock.release()
 
-    sql = f'update dp_stat.impala_query_log set processed = true where query_id = "{query_id}"'
-    utils.exec_impala_sql(cursor, sql)
-
-    err_msg_lower = err_msg.lower()
-    if 'duplicate entry' in err_msg_lower and 'insert into' in err_msg_lower:
-        mark_not_support(conn, query_id)           
-
-
-def test_batch():
-    batch_size = 100
+@utils.thread_method
+def test_one(query_id, impala_start_time, impala_duration, total):
     conn = utils.get_tidb_conn()
+    cursor = utils.get_impala_cursor()
+    try:
+        try:
+            # 接口不稳定，偶发报错，跳过
+            tenant, db, impala_sql, tidb_sql = get_sql_text(query_id)
+            # 忽略一些sql
+            if '_parquet_' in impala_sql or db == 'ai' or 'NotsupportFunctionError' in tidb_sql or 'NDV(' in impala_sql:
+                sql = f'update dp_stat.impala_query_log set processed = true where query_id = "{query_id}"'
+                utils.exec_impala_sql(cursor, sql)
+                logger.info('skip one')
+                count_one(total)
+                return
+        except:
+            logger.error('api error once')
+            count_one(total)
+            return
+        try:
+            err_msg = ''
+            duration = 0
+            if db != 'default':
+                utils.exec_tidb_sql(conn, f'use {db}')
+            start = time.time()
+            # logger.info(query_id)
+            # logger.info(tidb_sql)
+            utils.exec_tidb_sql(conn, tidb_sql)
+            duration = time.time() - start
+        except Exception as e:
+            err_msg = str(e)
+            logger.error(f'{query_id} error')
+        
+        sql = 'insert into test.translate_test (query_id, tenant, db, impala_start_time, impala_sql, impala_duration, tidb_sql, tidb_duration, success, err_msg)' +\
+            f'values("{query_id}", "{tenant}", "{db}", "{impala_start_time}", "{escape_string(impala_sql)}", \
+                    {impala_duration}, "{escape_string(tidb_sql)}", {duration}, {0 if err_msg else 1}, \
+                    "{escape_string(err_msg)}")'
+        # logger.error(sql)
+        utils.exec_tidb_sql(conn, sql)
+
+        sql = f'update dp_stat.impala_query_log set processed = true where query_id = "{query_id}"'
+        utils.exec_impala_sql(cursor, sql)
+
+        err_msg_lower = err_msg.lower()
+        if ('duplicate entry' in err_msg_lower and 'insert into' in err_msg_lower) or \
+            "'null'" in err_msg_lower:
+            mark_not_support(conn, query_id)
+        count_one(total)
+    finally:
+        cursor.close()
+        conn.close()
+
+def test_batch(batch_size):
     sql = f"SELECT query_id, start_time, duration FROM dp_stat.impala_query_log where processed = false and start_time >= '2022-4-22' and start_time < '2022-4-29' limit {batch_size}"
     cursor = utils.get_impala_cursor()
     cursor.execute(sql)
     df = as_pandas(cursor)
     logger.info(f'get {len(df)} sqls')
-    for i in range(len(df)):
-        test_one(conn, cursor, df.at[i, 'query_id'], df.at[i, 'start_time'].strftime('%Y-%m-%d %H:%M:%S'), df.at[i, 'duration'])
-        logger.info(f'{i + 1} / {batch_size} finish')
-        # break
     cursor.close()
-    conn.close()
-    return len(df) > 0
+    global finish_count
+    finish_count = 0
+    pool = ThreadPoolExecutor(max_workers=utils.thread_count)
+    for i in range(len(df)):
+        pool.submit(test_one, df.at[i, 'query_id'], df.at[i, 'start_time'].strftime('%Y-%m-%d %H:%M:%S'), df.at[i, 'duration'], batch_size)
+    pool.shutdown(wait=True)
+    return len(df)
 
 def re_run_error_sql(conn, id, query_id):
     try:
@@ -139,8 +160,13 @@ def re_run_error_sql_batch(start_id=0):
     return last_id, total_count, success_count
 
 def run_new():
-    while test_batch():
-        pass
+    batch_size = 1000
+    execute_count = test_batch(batch_size)
+    total_count = execute_count
+    while execute_count > 0:
+        logger.info(f'total finished: {total_count}')
+        execute_count = test_batch(1000)
+        total_count += execute_count
 
 def run_err():
     last_id, total_count, success_count = re_run_error_sql_batch()

@@ -46,7 +46,7 @@ def get_tidb_conn():
         user = conf.get('tidb', 'user')
         pwd = conf.get('tidb', 'pwd')
         db = conf.get('tidb', 'db')
-        con_str = f'mysql+pymysql://{user}:{pwd}@{host}:{port}/{db}?charset=utf8'
+        con_str = f'mysql+mysqldb://{user}:{pwd}@{host}:{port}/{db}?charset=utf8'
         _tidb_engine = sqlalchemy.create_engine(con_str)
     return _tidb_engine.connect()
 
