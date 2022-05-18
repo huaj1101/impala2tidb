@@ -3,5 +3,6 @@ schemas
 test.log
 __pycache__
 data
+big_sqls
 error_data.txt
 correct_prod_data.sql
