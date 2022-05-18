@@ -72,7 +72,7 @@ def run(engine, action):
         if file.endswith('.json'):
             files.append(file)
     files.sort()
-    files = ['global_dw_1.json', 'global_dw_2.json', 'global_dwb.json']
+    files = ['global_dw_1.json', 'global_dwb.json']
     tables_schema = []
     for file in files:
         with open(f'schemas/{file}', 'r', encoding='utf-8') as f:

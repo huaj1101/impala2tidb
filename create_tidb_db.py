@@ -123,7 +123,7 @@ def main():
         if file.endswith('.json'):
             files.append(file)
     files.sort()
-    files = ['cr16g_custom.json']
+    files = ['dp_stat.json']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for file in files:
         db = file.replace('.json', '')

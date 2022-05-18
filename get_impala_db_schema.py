@@ -15,9 +15,6 @@ thread_context = threading.local()
 sql_times = {}
 lock = threading.Lock()
 finish_count = 0
-# error_columns = []
-# ACK = '\u0006'
-# BEL = '\u0007'
 
 def get_pk_unique_subset(db, table, pk, cursor):
     new_keys = []
@@ -71,12 +68,6 @@ def get_table_schema_kudu(db, table, cursor, df_columns):
             for cs in columns:
                 if cs['name'] == name:
                     cs['len'] = int(value)
-        # for col in str_columns:
-        #     sql = f'select count(*) as cnt from {db}.{table} where {col} like "%{ACK}%" or {col} like "%{BEL}%"'
-        #     utils.exec_sql(cursor, sql)
-        #     df = as_pandas(cursor)
-        #     if df.at[0, 'cnt'] > 0:
-        #         error_columns.append(f'{db}.{table}.{col}')
     return {
         'table': f'`{db}`.`{table}`', 
         'type': 'kudu',
@@ -87,19 +78,20 @@ def get_table_schema_kudu(db, table, cursor, df_columns):
 
 def get_table_schema_parquet(db, table, cursor, df_columns):
     columns = []
-    # str_columns = []
+    str_columns = []
+    pks = ''
+    if table.startswith('agg_'):
+        pks = get_agg_table_pks(table)
     for i in range(len(df_columns)):
         name = f'`{df_columns.at[i, "name"]}`'
         type = df_columns.at[i, 'type']
-        length = 0
-        if type == 'string':
-            length = 1000
-            # str_columns.append(name)
+        if type == 'string' and name != '`tenant`':
+            str_columns.append(name)
         column_schema = {
             'name': name,
             'type': type,
-            'len': length,
-            'nullable': 'true',
+            'len': 0,
+            'nullable': 'false' if name in pks else 'true',
             'default_value': ""
         }
         columns.append(column_schema)
@@ -112,32 +104,48 @@ def get_table_schema_parquet(db, table, cursor, df_columns):
         tenant_column['len'] = 50
         columns.remove(tenant_column)
         columns.insert(0, tenant_column)
-    # if str_columns:
-    #     sql = f'select {",".join([f"ifnull(max(length({col})), 0) as {col}" for col in str_columns])} from {db}.{table}'
-    #     utils.exec_sql(cursor, sql)
-    #     df_columns = as_pandas(cursor)
-    #     for i in range(len(df_columns.columns)):
-    #         name = df_columns.columns[i]
-    #         value = df_columns.at[0, name]
-    #         name = f'`{name}`'
-    #         for cs in columns:
-    #             if cs['name'] == name:
-    #                 cs['len'] = int(value)
+    if str_columns:
+        sql = f'select {",".join([f"ifnull(max(length({col})), 0) as {col}" for col in str_columns])} from {db}.{table}'
+        utils.exec_impala_sql(cursor, sql)
+        df_columns = as_pandas(cursor)
+        for i in range(len(df_columns.columns)):
+            name = df_columns.columns[i]
+            value = df_columns.at[0, name]
+            name = f'`{name}`'
+            for cs in columns:
+                if cs['name'] == name:
+                    cs['len'] = int(value)
     return {
         'table': f'`{db}`.`{table}`', 
         'type': 'parquet',
         'columns': columns,
-        'primary_keys': '',
-        'pk_unique_subset': ''
+        'primary_keys': pks,
+        'pk_unique_subset': pks
         }
+
+def get_agg_table_pks(table):
+    conn = utils.get_dim_model_conn()
+    sql = f'select ifnull(group_concat(f.`name`), "") as pks from agg_field f join agg_table t on t.`id` = f.`agg_table_id`\
+            where t.`name` = "{table}" and f.`is_pk` order by f.order_no'
+    df = utils.get_tidb_data(conn, sql)
+    pks = df.at[0, 'pks']
+    if pks:
+        pks = 'tenant,' + pks
+        pks = ','.join([f'`{pk}`' for pk in pks.split(',')])
+    return pks
 
 def get_table_schema(db, table, cursor):
     cursor.execute(f'describe {db}.{table}')
     df = as_pandas(cursor)
     if len(df.columns) == 3:
-        return get_table_schema_parquet(db, table, cursor, df)
+        ts = get_table_schema_parquet(db, table, cursor, df)
     else:
-        return get_table_schema_kudu(db, table, cursor, df)
+        ts = get_table_schema_kudu(db, table, cursor, df)
+    sql = f'select count(*) as cnt from {db}.{table}'
+    utils.exec_impala_sql(cursor, sql)
+    df = as_pandas(cursor)
+    ts['record_count'] = int(df.at[0, 'cnt'])
+    return ts
 
 @utils.thread_method
 def get_db_schema(db, total_count):
@@ -164,13 +172,11 @@ def get_db_schema(db, total_count):
 @utils.timeit
 def main():
     dbs = utils.get_impala_dbs()
-    dbs = ['cr16g_custom']
+    dbs = ['dp_stat']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for db in dbs:
         pool.submit(get_db_schema, db, len(dbs))
     pool.shutdown(wait=True)
-    # for col in error_columns:
-    #     logger.error(col)
 
 if __name__ == '__main__':
     main()

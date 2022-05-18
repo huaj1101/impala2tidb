@@ -50,7 +50,7 @@ def count_one(total):
     lock.release()
 
 @utils.thread_method
-def test_one(query_id, impala_start_time, impala_duration, total):
+def run_new_one(query_id, hash_id, impala_start_time, impala_duration, total):
     conn = utils.get_tidb_conn()
     cursor = utils.get_impala_cursor()
     try:
@@ -58,14 +58,16 @@ def test_one(query_id, impala_start_time, impala_duration, total):
             # 接口不稳定，偶发报错，跳过
             tenant, db, impala_sql, tidb_sql = get_sql_text(query_id)
             # 忽略一些sql
-            if '_parquet_' in impala_sql or db == 'ai' or 'NotsupportFunctionError' in tidb_sql or 'NDV(' in impala_sql:
+            if '_parquet_' in impala_sql or db == 'ai' or 'NotsupportFunctionError' in tidb_sql \
+                or 'NDV(' in impala_sql or 'background:true' in impala_sql:
                 sql = f'update dp_stat.impala_query_log set processed = true where query_id = "{query_id}"'
                 utils.exec_impala_sql(cursor, sql)
                 logger.info('skip one')
                 count_one(total)
                 return
-        except:
-            logger.error('api error once')
+        except Exception as e:
+            logger.error(f'api error once {query_id}')
+            # logger.error(str(e))
             count_one(total)
             return
         try:
@@ -84,8 +86,8 @@ def test_one(query_id, impala_start_time, impala_duration, total):
     
         if len(impala_sql) > 1e6 or len(tidb_sql) > 1e6:
             impala_sql = tidb_sql = 'sql too large to store here'
-        sql = 'insert into test.translate_test (query_id, tenant, db, impala_start_time, impala_sql, impala_duration, tidb_sql, tidb_duration, success, err_msg)' +\
-            f'values("{query_id}", "{tenant}", "{db}", "{impala_start_time}", "{escape_string(impala_sql)}", \
+        sql = 'insert into test.translate_test (query_id, hash_id, tenant, db, impala_start_time, impala_sql, impala_duration, tidb_sql, tidb_duration, success, err_msg)' +\
+            f'values("{query_id}", "{hash_id}", "{tenant}", "{db}", "{impala_start_time}", "{escape_string(impala_sql)}", \
                     {impala_duration}, "{escape_string(tidb_sql)}", {duration}, {0 if err_msg else 1}, \
                     "{escape_string(err_msg)}")' +\
                 'on duplicate key update tidb_sql=values(tidb_sql), tidb_duration=values(tidb_duration), success=values(success), err_msg=values(err_msg)'
@@ -106,8 +108,10 @@ def test_one(query_id, impala_start_time, impala_duration, total):
         cursor.close()
         conn.close()
 
-def test_batch(batch_size):
-    sql = f"SELECT query_id, start_time, duration FROM dp_stat.impala_query_log where processed = false and start_time >= '2022-4-22' and start_time < '2022-4-29' limit {batch_size}"
+def run_new_batch(batch_size):
+    sql = f"SELECT query_id, hash_id, start_time, duration FROM dp_stat.impala_query_log \
+            where processed = false and `user` not in ('etl', 'tableau') and start_time >= '2022-4-22' and start_time < '2022-4-29' \
+            limit {batch_size}"
     cursor = utils.get_impala_cursor()
     cursor.execute(sql)
     df = as_pandas(cursor)
@@ -117,11 +121,12 @@ def test_batch(batch_size):
     finish_count = 0
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for i in range(len(df)):
-        pool.submit(test_one, df.at[i, 'query_id'], df.at[i, 'start_time'].strftime('%Y-%m-%d %H:%M:%S'), df.at[i, 'duration'], batch_size)
+        pool.submit(run_new_one, df.at[i, 'query_id'], df.at[i, 'hash_id'], 
+            df.at[i, 'start_time'].strftime('%Y-%m-%d %H:%M:%S'), df.at[i, 'duration'], batch_size)
     pool.shutdown(wait=True)
     return len(df)
 
-def re_run_error_sql(conn, id, query_id):
+def run_error_one(conn, id, query_id):
     try:
         # 接口不稳定，偶发报错，跳过
         tenant, db, impala_sql, tidb_sql = get_sql_text(query_id)
@@ -153,11 +158,9 @@ def re_run_error_sql(conn, id, query_id):
     if 'duplicate entry' in err_msg_lower and 'insert into' in err_msg_lower:
         mark_ignore(conn, query_id)
 
-    return err_msg == ''   
+    return err_msg == ''
 
-def re_run_error_sql_batch(start_id=0):
-    # logger.info('re_run_error_sql_batch')
-    batch_size = 100
+def run_error_batch(batch_size, start_id=0):
     conn = utils.get_tidb_conn()
     sql = f'select id, query_id from test.`translate_error` where id > {start_id} order by id limit {batch_size}'
     df = utils.get_tidb_data(conn, sql)
@@ -169,27 +172,88 @@ def re_run_error_sql_batch(start_id=0):
     for i in range(total_count):
         last_id = df.at[i, 'id']
         query_id = df.at[i, 'query_id']
-        if re_run_error_sql(conn, last_id, query_id):
+        if run_error_one(conn, last_id, query_id):
             success_count += 1
     return last_id, total_count, success_count
 
+@utils.thread_method
+def run_slow_one(id, query_id, total):
+    try:
+        # 接口不稳定，偶发报错，跳过
+        tenant, db, impala_sql, tidb_sql = get_sql_text(query_id)
+    except Exception as e:
+        logger.error(f'api error: {str(e)}')
+        time.sleep(1)
+        return
+    try:
+        conn = utils.get_tidb_conn()
+        duration = 0
+        err_msg = ''
+        if db != 'default':
+            utils.exec_tidb_sql(conn, f'use {db}')
+        start = time.time()
+        utils.exec_tidb_sql(conn, tidb_sql)
+        duration = time.time() - start
+    except Exception as e:
+        err_msg = str(e)
+    count_one(total)
+    err_msg_lower = err_msg.lower()
+    if 'duplicate entry' in err_msg_lower and 'insert into' in err_msg_lower:
+        sql = f'update test.translate_test set slow_re_run=1 where id={id}'
+        utils.exec_tidb_sql(conn, sql)
+    elif err_msg:
+        sql = f'update test.translate_test set tidb_sql="{escape_string(tidb_sql)}", success=0, err_msg="{escape_string(err_msg)}" where id={id}'
+        utils.exec_tidb_sql(conn, sql)
+        logger.error(f'{id} error')
+    else:
+        sql = f'update test.translate_test set tidb_sql="{escape_string(tidb_sql)}", tidb_duration={duration}, slow_re_run=1 where id={id}'
+        utils.exec_tidb_sql(conn, sql)
+
+def run_slow_batch(batch_size, start_id=0):
+    sql = f'select id, query_id from test.`translate_test` \
+            where id > {start_id} and tidb_duration > impala_duration and tidb_duration > 2 \
+                and status is null and success = 1 and slow_re_run=0\
+            order by id limit {batch_size}'
+    conn = utils.get_tidb_conn()
+    df = utils.get_tidb_data(conn, sql)
+    logger.info(f'get {len(df)} sqls')
+    conn.close()
+    global finish_count
+    finish_count = 0
+    last_id = 0
+    pool = ThreadPoolExecutor(max_workers=utils.thread_count)
+    for i in range(len(df)):
+        last_id = df.at[i, 'id']
+        pool.submit(run_slow_one, last_id, df.at[i, 'query_id'], batch_size)
+    pool.shutdown(wait=True)
+    return len(df), last_id
+
 def run_new():
     batch_size = 1000
-    execute_count = test_batch(batch_size)
+    execute_count = run_new_batch(batch_size)
     total_count = execute_count
     while execute_count > 0:
         logger.info(f'total finished: {total_count}')
-        execute_count = test_batch(1000)
+        execute_count = run_new_batch(batch_size)
         total_count += execute_count
 
 def run_err():
-    last_id, total_count, success_count = re_run_error_sql_batch()
+    batch_size = 100
+    last_id, total_count, success_count = run_error_batch(batch_size)
     while last_id > 0:
-        last_id, c1, c2 = re_run_error_sql_batch(last_id)
+        last_id, c1, c2 = run_error_batch(batch_size, last_id)
         total_count += c1
         success_count += c2
     logger.error(f'run error sqls finish, {success_count} / {total_count} success now')
 
+def run_slow():
+    batch_size = 1000
+    execute_count, last_id = run_slow_batch(batch_size)
+    total_count = execute_count
+    while execute_count > 0:
+        logger.info(f'total finished: {total_count}')
+        execute_count, last_id = run_slow_batch(batch_size, last_id)
+        total_count += execute_count
 
 if __name__ == '__main__':
     verb = ''
@@ -199,5 +263,7 @@ if __name__ == '__main__':
         run_new()
     elif verb == 'run_err':
         run_err()
+    elif verb == 'run_slow':
+        run_slow()
     else:
-        logger.error('param shoud be: run_new / run_err')
+        logger.error('param shoud be: run_new / run_err / run_slow')

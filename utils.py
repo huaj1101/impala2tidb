@@ -50,6 +50,19 @@ def get_tidb_conn():
         _tidb_engine = sqlalchemy.create_engine(con_str)
     return _tidb_engine.connect()
 
+_dimmodel_engine = None
+def get_dim_model_conn():
+    global _dimmodel_engine
+    if _dimmodel_engine is None:
+        host = conf.get('dim_model', 'host')
+        port = conf.get('dim_model', 'port')
+        user = conf.get('dim_model', 'user')
+        pwd = conf.get('dim_model', 'pwd')
+        db = conf.get('dim_model', 'db')
+        con_str = f'mysql+mysqldb://{user}:{pwd}@{host}:{port}/{db}?charset=utf8'
+        _dimmodel_engine = sqlalchemy.create_engine(con_str)
+    return _dimmodel_engine.connect()
+
 def _pre_process_tidb_sql(sql):
     sql = sql.replace(r'%', r'%%')
     return sql
@@ -63,7 +76,6 @@ def get_tidb_data(conn: sqlalchemy.engine.Connection, sql: str):
     sql = _pre_process_tidb_sql(sql)
     # logger.info(sql)
     return pd.read_sql_query(sql, conn)
-
 
 def get_impala_cursor():
     conn = impala.dbapi.connect(host=conf.get('impala', 'host'), port=conf.getint('impala', 'port'), database=conf.get('impala', 'db'), 
@@ -79,7 +91,7 @@ def get_impala_cursor_prod():
     return cursor
 
 def filter_biz_db(db):
-    special_dbs = ['public_data']
+    special_dbs = ['public_data', 'ai', 'dp_stat']
     ignore_dbs = []
     # ignore_dbs = ['global_dw_1', 'global_dw_2', 'global_dwb']
     return not db.startswith('___') and db not in ignore_dbs and not db.endswith('_text') and \
