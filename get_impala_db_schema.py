@@ -79,9 +79,6 @@ def get_table_schema_kudu(db, table, cursor, df_columns):
 def get_table_schema_parquet(db, table, cursor, df_columns):
     columns = []
     str_columns = []
-    pks = ''
-    if table.startswith('agg_'):
-        pks = get_agg_table_pks(table)
     for i in range(len(df_columns)):
         name = f'`{df_columns.at[i, "name"]}`'
         type = df_columns.at[i, 'type']
@@ -91,7 +88,7 @@ def get_table_schema_parquet(db, table, cursor, df_columns):
             'name': name,
             'type': type,
             'len': 0,
-            'nullable': 'false' if name in pks else 'true',
+            'nullable': 'true',
             'default_value': ""
         }
         columns.append(column_schema)
@@ -119,20 +116,9 @@ def get_table_schema_parquet(db, table, cursor, df_columns):
         'table': f'`{db}`.`{table}`', 
         'type': 'parquet',
         'columns': columns,
-        'primary_keys': pks,
-        'pk_unique_subset': pks
+        'primary_keys': '',
+        'pk_unique_subset': ''
         }
-
-def get_agg_table_pks(table):
-    conn = utils.get_dim_model_conn()
-    sql = f'select ifnull(group_concat(f.`name`), "") as pks from agg_field f join agg_table t on t.`id` = f.`agg_table_id`\
-            where t.`name` = "{table}" and f.`is_pk` order by f.order_no'
-    df = utils.get_tidb_data(conn, sql)
-    pks = df.at[0, 'pks']
-    if pks:
-        pks = 'tenant,' + pks
-        pks = ','.join([f'`{pk}`' for pk in pks.split(',')])
-    return pks
 
 def get_table_schema(db, table, cursor):
     cursor.execute(f'describe {db}.{table}')
@@ -172,7 +158,7 @@ def get_db_schema(db, total_count):
 @utils.timeit
 def main():
     dbs = utils.get_impala_dbs()
-    dbs = ['dp_stat']
+    dbs = ['global_dw_1', 'global_dw_2', 'global_dwb']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for db in dbs:
         pool.submit(get_db_schema, db, len(dbs))
