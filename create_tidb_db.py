@@ -123,7 +123,7 @@ def main():
         if file.endswith('.json'):
             files.append(file)
     files.sort()
-    files = ['dp_stat.json']
+    files = ['global_dw_1.json', 'global_dw_2.json', 'global_dwb.json']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for file in files:
         db = file.replace('.json', '')
@@ -135,3 +135,9 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+# alter table global_mtlp.q_piece add index (tenant, org_id, schedule_id, pro_line, piece_id)
+# alter table global_mtlp.q_dosage add index (tenant, org_id, dosage_id, schedule_id, piece_id, pro_line)
+# alter table global_mtlp.q_produce add index (tenant, org_id, schedule_id, pro_line)
+# alter table global_mtlp.m_gh_plan_check add index (tenant, org_id, ori_gh_id)
+# alter table global_mtlp.q_inventory add index (tenant, org_id, item_bar_code)

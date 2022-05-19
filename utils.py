@@ -50,18 +50,18 @@ def get_tidb_conn():
         _tidb_engine = sqlalchemy.create_engine(con_str)
     return _tidb_engine.connect()
 
-_dimmodel_engine = None
-def get_dim_model_conn():
-    global _dimmodel_engine
-    if _dimmodel_engine is None:
-        host = conf.get('dim_model', 'host')
-        port = conf.get('dim_model', 'port')
-        user = conf.get('dim_model', 'user')
-        pwd = conf.get('dim_model', 'pwd')
-        db = conf.get('dim_model', 'db')
-        con_str = f'mysql+mysqldb://{user}:{pwd}@{host}:{port}/{db}?charset=utf8'
-        _dimmodel_engine = sqlalchemy.create_engine(con_str)
-    return _dimmodel_engine.connect()
+# _dimmodel_engine = None
+# def get_dim_model_conn():
+#     global _dimmodel_engine
+#     if _dimmodel_engine is None:
+#         host = conf.get('dim_model', 'host')
+#         port = conf.get('dim_model', 'port')
+#         user = conf.get('dim_model', 'user')
+#         pwd = conf.get('dim_model', 'pwd')
+#         db = conf.get('dim_model', 'db')
+#         con_str = f'mysql+mysqldb://{user}:{pwd}@{host}:{port}/{db}?charset=utf8'
+#         _dimmodel_engine = sqlalchemy.create_engine(con_str)
+#     return _dimmodel_engine.connect()
 
 def _pre_process_tidb_sql(sql):
     sql = sql.replace(r'%', r'%%')

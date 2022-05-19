@@ -12,7 +12,7 @@ import re
 import pandas as pd
 import pymysql
 from pymysql.converters import escape_string
-from queue import Queue
+from multiprocessing import Process, Queue, Manager, Lock
 
 logger = logging.getLogger(__name__)
 
@@ -22,12 +22,12 @@ _task_count_th = 1000
 _task_queue = Queue()
 _finish_task_queue = Queue()
 
-_fill_task_thread: threading.Thread = None
-_exec_task_threads: List[threading.Thread] = []
-_clean_task_threads: List[threading.Thread] = []
+_fill_task_proc: Process = None
+_exec_task_procs: List[Process] = []
+_clean_task_procs: List[Process] = []
 
-_finish_count = 0
-_count_lock = threading.Lock()
+_share_dict = None
+_lock = Lock()
 
 class Task:
     def __init__(self, id, query_id, db, sql) -> None:
@@ -39,14 +39,6 @@ class Task:
         self.exec_duration: float = 0
         self.exec_time: str = ''
         self.err_msg: str = ''
-
-def count_one():
-    global _finish_count
-    _count_lock.acquire()
-    _finish_count += 1
-    if _finish_count % 10 == 0:
-        logger.info(f'{_finish_count} task finished, tasks to clean: {_finish_task_queue.qsize()}')
-    _count_lock.release()
 
 def get_big_sql(query_id):
     logger.info(f'load big sql: {query_id}')
@@ -80,11 +72,10 @@ def get_new_tasks(batch_size=100) -> List[Task]:
             result.append(task) 
     return result
 
-@utils.thread_method
-def fill_task_action():
+def fill_task_action(share_dict, lock, task_queue: Queue):
     global _start_id
     while True:
-        if _task_queue.qsize() < _task_count_th:
+        if task_queue.qsize() < _task_count_th:
             try:
                 tasks = get_new_tasks()
             except Exception as e:
@@ -92,18 +83,17 @@ def fill_task_action():
                 time.sleep(1)
                 continue
             for task in tasks:
-                _task_queue.put(task)
+                task_queue.put(task)
             if len(tasks) > 0:
                 _start_id = tasks[-1].id
-                logger.info(f'fill {len(tasks)} tasks, queue size: {_task_queue.qsize()}')
+                logger.info(f'fill {len(tasks)} tasks, queue size: {task_queue.qsize()}')
         else:
             time.sleep(1)
 
-@utils.thread_method
-def exec_task_action():
+def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Queue):
     while True:
         try:
-            task: Task = _task_queue.get(block=False)
+            task: Task = task_queue.get(block=False)
         except:
             logger.error('task queue empty')
             time.sleep(3)
@@ -127,7 +117,7 @@ def exec_task_action():
         task.exec_result = 0 if err_msg else 1
         task.err_msg = err_msg
         task.exec_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        _finish_task_queue.put(task)
+        finish_task_queue.put(task)
 
 def get_error_catalog(sql: str, err_msg: str):
     sql = sql.lower()
@@ -152,11 +142,10 @@ def get_error_catalog(sql: str, err_msg: str):
         return 'ignore_tableau'
     return 'not_processed'
 
-@utils.thread_method
-def clean_task_action():
+def clean_task_action(share_dict, lock, finish_task_queue: Queue):
     conn = utils.get_tidb_conn()
     while True:
-        task: Task = _finish_task_queue.get(block=True)
+        task: Task = finish_task_queue.get(block=True)
         sql = f'update test.translate_sqls set \
                   tidb_duration = {task.exec_duration}, \
                   execute_result = {task.exec_result}, \
@@ -169,36 +158,45 @@ def clean_task_action():
                     values ("{task.query_id}", "{escape_string(task.err_msg)}", "{catalog}") \
                     on duplicate key update err_msg=values(err_msg), catalog=values(catalog)'
             utils.exec_tidb_sql(conn, sql)
-        count_one()
+        with lock:
+            share_dict['finish_count'] = share_dict['finish_count'] + 1
+            if share_dict['finish_count'] % 10 == 0:
+                logger.info(f'{share_dict["finish_count"]} task finished, tasks to clean: {finish_task_queue.qsize()}')
 
-def start_fill_task_thread():
-    global _fill_task_thread
-    _fill_task_thread = threading.Thread(target=fill_task_action, name='thread-fill-task')
-    _fill_task_thread.setDaemon(True)
-    _fill_task_thread.start()
+def start_fill_task_proc():
+    global _fill_task_proc
+    _fill_task_proc = Process(target=fill_task_action, name='proc-fill-task', 
+        args=(_share_dict, _lock, _task_queue))
+    _fill_task_proc.daemon = True
+    _fill_task_proc.start()
 
-def start_exec_task_threads(thread_count=10):
+def start_exec_task_procs(thread_count=10):
     for i in range(thread_count):
-        thread = threading.Thread(target=exec_task_action, name=f'thread-exec-task-{i}')
-        thread.setDaemon(True)
-        _exec_task_threads.append(thread)
-    for thread in _exec_task_threads:
-        thread.start()
+        proc = Process(target=exec_task_action, name=f'proc-exec-task-{i}',
+            args=(_share_dict, _lock, _task_queue, _finish_task_queue))
+        proc.daemon = True
+        _exec_task_procs.append(proc)
+    for proc in _exec_task_procs:
+        proc.start()
 
-def start_clean_task_threads(thread_count=3):
+def start_clean_task_procs(thread_count=3):
     for i in range(thread_count):
-        thread = threading.Thread(target=clean_task_action, name=f'thread-clean-task-{i}')
-        thread.setDaemon(True)
-        _clean_task_threads.append(thread)
-    for thread in _clean_task_threads:
-        thread.start()
+        proc = Process(target=clean_task_action, name=f'proc-clean-task-{i}', 
+            args=(_share_dict, _lock, _finish_task_queue))
+        proc.daemon = True
+        _clean_task_procs.append(proc)
+    for proc in _clean_task_procs:
+        proc.start()
 
 def run():
-    start_fill_task_thread()
-    time.sleep(3)
-    start_exec_task_threads()
-    time.sleep(3)
-    start_clean_task_threads()
+    global _share_dict
+    manager = Manager()
+    _share_dict = manager.dict({'finish_count': 0})
+    start_fill_task_proc()
+    time.sleep(1)
+    start_exec_task_procs()
+    time.sleep(1)
+    start_clean_task_procs()
     while True:
         time.sleep(1)
 
