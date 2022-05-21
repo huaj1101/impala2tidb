@@ -89,14 +89,23 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
                       'on duplicate key update tidb_sql=values(tidb_sql)'
             else:
                 err_msg = task['error']
-                sql = 'insert into test.translate_err (query_id, tenant, db, impala_sql, err_msg)' +\
-                     f'values("{query_id}", "{tenant}", "{db}", "{escape_string(impala_sql)}", "{escape_string(err_msg)}")' +\
-                      'on duplicate key update err_msg=values(err_msg)'
+                err_msg_lower = err_msg.lower()
+                # 一些已知的问题跳过不存
+                if '不支持转换的函数' in err_msg_lower and (\
+                    'regexp_replace' in err_msg_lower or \
+                    'regexp_extract' in err_msg_lower or \
+                    'instr' in err_msg_lower):
+                    sql = ''
+                else:
+                    sql = 'insert into test.translate_err (query_id, tenant, db, impala_sql, err_msg)' +\
+                        f'values("{query_id}", "{tenant}", "{db}", "{escape_string(impala_sql)}", "{escape_string(err_msg)}")' +\
+                        'on duplicate key update err_msg=values(err_msg)'
         except Exception as e:
             logger.error(f'parse api response {query_id} error: {task}')
             continue
         try:
-            utils.exec_tidb_sql(conn, sql)
+            if sql:
+                utils.exec_tidb_sql(conn, sql)
             if big_sql:
                 save_big_sql(query_id, big_sql)
             finish_task_queue.put(query_id)
@@ -107,11 +116,10 @@ def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Qu
     cursor = utils.get_impala_cursor() 
     finish_count = 0
     while True:
-        if finish_task_queue.qsize() < _batch_size:
+        while finish_task_queue.qsize() < _batch_size:
             time.sleep(0.1)
-            continue
         query_ids = []
-        for i in range(_batch_size):
+        for i in range(finish_task_queue.qsize()):
             query_ids.append(f'"{finish_task_queue.get()}"')
         sql = f'update dp_stat.impala_query_log_{_date} set saved_in_tidb = true where query_id in ({",".join(query_ids)})'
         try:
@@ -120,12 +128,11 @@ def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Qu
         except Exception as e:
             logger.error(f'save impala result error: {e}')
             time.sleep(1)
-        if finish_count % 200 == 0:
-            msg = f'finish: {finish_count}, '
-            msg = msg + f'tps: {round(finish_count / (time.time() - share_dict["start_time"]))}, '
-            msg = msg + f'queue: {task_queue.qsize()}, '
-            msg = msg + f'to_clean: {finish_task_queue.qsize()}'
-            logger.info(msg)
+        msg = f'finish: {finish_count}, '
+        msg = msg + f'tps: {round(finish_count / (time.time() - share_dict["start_time"]))}, '
+        msg = msg + f'queue: {task_queue.qsize()}, '
+        msg = msg + f'to_clean: {finish_task_queue.qsize()}'
+        logger.info(msg)
 
 def start_fill_task_proc():
     global _fill_task_proc

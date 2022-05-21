@@ -52,7 +52,7 @@ def get_big_sql(query_id):
 
 def get_new_tasks(batch_size=300) -> List[Task]:
     sql = f'select id, query_id, db, tidb_sql from test.translate_sqls \
-            where execute_result is null and id > {_start_id} and tidb_sql not like "%global_dw%" order by id limit {batch_size}'
+            where execute_result is null and id > {_start_id} order by id limit {batch_size}'
     conn = utils.get_tidb_conn()
     try:
         df = utils.get_tidb_data(conn, sql)
@@ -156,10 +156,12 @@ def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Qu
         utils.exec_tidb_sql(conn, sql)
         if task.exec_result == 0:
             catalog = get_error_catalog(task.sql, task.err_msg)
-            sql = f'insert into test.execute_err (query_id, err_msg, catalog) \
-                    values ("{task.query_id}", "{escape_string(task.err_msg)}", "{catalog}") \
-                    on duplicate key update err_msg=values(err_msg), catalog=values(catalog)'
-            utils.exec_tidb_sql(conn, sql)
+            if catalog not in ('ignore_duplicate_insert', 'ignore_etl'):
+                logger.info(catalog)
+                sql = f'insert into test.execute_err (query_id, err_msg, catalog) \
+                        values ("{task.query_id}", "{escape_string(task.err_msg)}", "{catalog}") \
+                        on duplicate key update err_msg=values(err_msg), catalog=values(catalog)'
+                utils.exec_tidb_sql(conn, sql)
         with lock:
             share_dict['finish_count'] = share_dict['finish_count'] + 1
             if share_dict['finish_count'] % 100 == 0:
@@ -203,7 +205,7 @@ def run():
     time.sleep(1)
     _share_dict['start_time'] = time.time()
     start_exec_task_procs(15)
-    start_clean_task_procs(2)
+    start_clean_task_procs(5)
     try:
         while True:
             time.sleep(1)
