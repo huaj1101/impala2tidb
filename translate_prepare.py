@@ -68,44 +68,48 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
         try:
             task = task_queue.get(block=True)
             query_id = task['queryId']
+            tenant = task['tenant']
+            db = task['db']
+            hash_id = task['hash']['value'] if 'hash' in task and task['hash']['valid'] else ''
+            sql_type = task['sqlType'] if 'sqlType' in task else 'unknown'
+            impala_duration = task['duration']
             impala_sql = task['impalaSql']
+            tidb_sql = task['tidbSql'] if task['success'] else ''
+            if len(impala_sql) > 1e6 or len(tidb_sql) > 1e6:
+                big_sql = tidb_sql
+                impala_sql = tidb_sql = 'big_sql'
+            else:
+                big_sql = ''
             if '_parquet_' in impala_sql or 'NDV(' in impala_sql or 'background:true' in impala_sql:
                 finish_task_queue.put(query_id)
                 continue
-            tenant = task['tenant']
-            db = task['db']
-            big_sql = ''
-            if task['success']:
-                hash_id = task['hash']['value'] if task['hash']['valid'] else ''
-                tidb_sql = task['tidbSql']
-                sql_type = task['sqlType']
-                impala_duration = task['duration']
-                if len(impala_sql) > 1e6 or len(tidb_sql) > 1e6:
-                    big_sql = tidb_sql
-                    impala_sql = tidb_sql = ''
-                sql = 'insert into test.translate_sqls (query_id, hash_id, tenant, db, sql_type, impala_sql, impala_duration, tidb_sql)' +\
-                     f'values("{query_id}", "{hash_id}", "{tenant}", "{db}", "{sql_type}", "{escape_string(impala_sql)}", \
-                            {impala_duration}, "{escape_string(tidb_sql)}")' +\
-                      'on duplicate key update tidb_sql=values(tidb_sql)'
-            else:
+            sql = 'insert into test.translate_sqls (query_id, order_id, hash_id, tenant, db, sql_type, impala_sql, impala_duration, tidb_sql)' +\
+                    f'values("{query_id}", nextval(test.seq), "{hash_id}", "{tenant}", "{db}", "{sql_type}", "{escape_string(impala_sql)}", \
+                        {impala_duration}, "{escape_string(tidb_sql)}")' +\
+                    'on duplicate key update tidb_sql=values(tidb_sql)'
+            sql_err = ''
+            if not task['success']:
                 err_msg = task['error']
-                err_msg_lower = err_msg.lower()
+                sql_err = 'insert into test.translate_err (query_id, err_msg, catalog)' +\
+                    f'values("{query_id}", "{escape_string(err_msg)}", "translate_error")' +\
+                    'on duplicate key update err_msg=values(err_msg)'
                 # 一些已知的问题跳过不存
+                err_msg_lower = err_msg.lower()
                 if '不支持转换的函数' in err_msg_lower and (\
                     'regexp_replace' in err_msg_lower or \
                     'regexp_extract' in err_msg_lower or \
                     'instr' in err_msg_lower):
                     sql = ''
-                else:
-                    sql = 'insert into test.translate_err (query_id, tenant, db, impala_sql, err_msg)' +\
-                        f'values("{query_id}", "{tenant}", "{db}", "{escape_string(impala_sql)}", "{escape_string(err_msg)}")' +\
-                        'on duplicate key update err_msg=values(err_msg)'
+                    sql_err = ''
+                    big_sql = ''
         except Exception as e:
             logger.error(f'parse api response {query_id} error: {task}')
             continue
         try:
             if sql:
                 utils.exec_tidb_sql(conn, sql)
+            if sql_err:
+                utils.exec_tidb_sql(conn, sql_err)
             if big_sql:
                 save_big_sql(query_id, big_sql)
             finish_task_queue.put(query_id)

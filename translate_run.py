@@ -11,6 +11,7 @@ import json
 import re
 import pandas as pd
 import pymysql
+import translate_utils
 from pymysql.converters import escape_string
 from multiprocessing import Process, Queue, Manager, Lock
 
@@ -30,9 +31,9 @@ _share_dict = None
 _lock = Lock()
 
 class Task:
-    def __init__(self, id, query_id, db, sql) -> None:
-        self.id: str = id
+    def __init__(self, query_id, order_id, db, sql) -> None:
         self.query_id: str = query_id
+        self.order_id: int = order_id
         self.db: str = db
         self.sql: str = sql
         self.exec_result: int = -1
@@ -51,8 +52,8 @@ def get_big_sql(query_id):
     return sql
 
 def get_new_tasks(batch_size=300) -> List[Task]:
-    sql = f'select id, query_id, db, tidb_sql from test.translate_sqls \
-            where execute_result is null and id > {_start_id} order by id limit {batch_size}'
+    sql = f'select query_id, order_id, db, tidb_sql from test.translate_sqls \
+            where execute_result is null and order_id > {_start_id} and tidb_sql != "" order by order_id limit {batch_size}'
     conn = utils.get_tidb_conn()
     try:
         df = utils.get_tidb_data(conn, sql)
@@ -61,12 +62,12 @@ def get_new_tasks(batch_size=300) -> List[Task]:
     result = []
     for i in range(len(df)):
         task = Task(
-            df.at[i, 'id'],
             df.at[i, 'query_id'],
+            df.at[i, 'order_id'],
             df.at[i, 'db'],
             df.at[i, 'tidb_sql']
             )
-        if not task.sql:
+        if task.sql == 'big_sql':
             task.sql = get_big_sql(task.query_id)
         if task.sql and task.db:
             result.append(task) 
@@ -85,7 +86,7 @@ def fill_task_action(share_dict, lock, task_queue: Queue):
             for task in tasks:
                 task_queue.put(task)
             if len(tasks) > 0:
-                _start_id = tasks[-1].id
+                _start_id = tasks[-1].order_id
                 # logger.info(f'fill {len(tasks)} tasks, queue size: {task_queue.qsize()}')
         else:
             time.sleep(1)
@@ -121,29 +122,6 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
         task.exec_time = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         finish_task_queue.put(task)
 
-def get_error_catalog(sql: str, err_msg: str):
-    sql = sql.lower()
-    err_msg = err_msg.lower()
-    if 'duplicate entry' in err_msg and 'insert into' in err_msg:
-        return "ignore_duplicate_insert"
-    if 'only_full_group_by' in err_msg:
-        return 'unsupport_group_by'
-    if 'incorrect datetime value' in err_msg:
-        return 'unsupport_date_format'
-    if 'full join' in sql or 'full outer join' in sql:
-        return 'unsupport_full_join'
-    if 'cannot be null' in err_msg:
-        return 'unsupport_null_value'
-    if 'invalid transaction' in err_msg:
-        return 'delay_too_many_union'
-    if 'regexp_replace' in sql or 'regexp_extract' in sql or 'instr(' in sql:
-        return 'unsupport_func'
-    if 'background:true' in sql:
-        return 'ignore_etl'
-    if 'x__' in sql:
-        return 'ignore_tableau'
-    return 'not_processed'
-
 def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Queue):
     conn = utils.get_tidb_conn()
     while True:
@@ -152,12 +130,11 @@ def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Qu
                   tidb_duration = {task.exec_duration}, \
                   execute_result = {task.exec_result}, \
                   execute_time = "{task.exec_time}" \
-                where id = {task.id}'
+                where query_id = "{task.query_id}"'
         utils.exec_tidb_sql(conn, sql)
         if task.exec_result == 0:
-            catalog = get_error_catalog(task.sql, task.err_msg)
+            catalog = translate_utils.get_error_catalog(task.sql, task.err_msg)
             if catalog not in ('ignore_duplicate_insert', 'ignore_etl'):
-                logger.info(catalog)
                 sql = f'insert into test.execute_err (query_id, err_msg, catalog) \
                         values ("{task.query_id}", "{escape_string(task.err_msg)}", "{catalog}") \
                         on duplicate key update err_msg=values(err_msg), catalog=values(catalog)'
