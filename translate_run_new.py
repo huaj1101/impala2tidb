@@ -17,7 +17,7 @@ from multiprocessing import Process, Queue, Manager, Lock
 logger = logging.getLogger(__name__)
 
 _start_id = 0
-_task_count_th = 1000
+_task_count_th = 3000
 
 _task_queue = Queue()
 _finish_task_queue = Queue()
@@ -50,9 +50,9 @@ def get_big_sql(query_id):
         logger.error(f'load big sql error: {e}')
     return sql
 
-def get_new_tasks(batch_size=100) -> List[Task]:
+def get_new_tasks(batch_size=300) -> List[Task]:
     sql = f'select id, query_id, db, tidb_sql from test.translate_sqls \
-            where execute_result is null and id > {_start_id} order by id limit {batch_size}'
+            where execute_result is null and id > {_start_id} and tidb_sql not like "%global_dw%" order by id limit {batch_size}'
     conn = utils.get_tidb_conn()
     try:
         df = utils.get_tidb_data(conn, sql)
@@ -86,16 +86,16 @@ def fill_task_action(share_dict, lock, task_queue: Queue):
                 task_queue.put(task)
             if len(tasks) > 0:
                 _start_id = tasks[-1].id
-                logger.info(f'fill {len(tasks)} tasks, queue size: {task_queue.qsize()}')
+                # logger.info(f'fill {len(tasks)} tasks, queue size: {task_queue.qsize()}')
         else:
             time.sleep(1)
 
 def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Queue):
     while True:
         try:
-            task: Task = task_queue.get(block=False)
-        except:
-            logger.error('task queue empty')
+            task: Task = task_queue.get(block=True)
+        except Exception as e:
+            logger.error(str(e))
             time.sleep(3)
             continue
         err_msg = ''
@@ -110,7 +110,9 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
                 duration = time.time() - start
             except Exception as e:
                 err_msg = str(e)
-                logger.error(f'{task.query_id} error')
+                with lock:
+                    share_dict['err_count'] = share_dict['err_count'] + 1
+                # logger.error(f'{task.query_id} error')
         finally:
             conn.close()
         task.exec_duration = duration
@@ -142,7 +144,7 @@ def get_error_catalog(sql: str, err_msg: str):
         return 'ignore_tableau'
     return 'not_processed'
 
-def clean_task_action(share_dict, lock, finish_task_queue: Queue):
+def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Queue):
     conn = utils.get_tidb_conn()
     while True:
         task: Task = finish_task_queue.get(block=True)
@@ -154,14 +156,19 @@ def clean_task_action(share_dict, lock, finish_task_queue: Queue):
         utils.exec_tidb_sql(conn, sql)
         if task.exec_result == 0:
             catalog = get_error_catalog(task.sql, task.err_msg)
-            sql = f'insert into test.translate_err (query_id, err_msg, catalog) \
+            sql = f'insert into test.execute_err (query_id, err_msg, catalog) \
                     values ("{task.query_id}", "{escape_string(task.err_msg)}", "{catalog}") \
                     on duplicate key update err_msg=values(err_msg), catalog=values(catalog)'
             utils.exec_tidb_sql(conn, sql)
         with lock:
             share_dict['finish_count'] = share_dict['finish_count'] + 1
-            if share_dict['finish_count'] % 10 == 0:
-                logger.info(f'{share_dict["finish_count"]} task finished, tasks to clean: {finish_task_queue.qsize()}')
+            if share_dict['finish_count'] % 100 == 0:
+                msg = f'finish: {share_dict["finish_count"]}, '
+                msg = msg + f'tps: {round(share_dict["finish_count"] / (time.time() - share_dict["start_time"]))}, '
+                msg = msg + f'fail: {share_dict["err_count"]}, '
+                msg = msg + f'queue: {task_queue.qsize()}, '
+                msg = msg + f'to_clean: {finish_task_queue.qsize()}'
+                logger.info(msg)
 
 def start_fill_task_proc():
     global _fill_task_proc
@@ -170,7 +177,7 @@ def start_fill_task_proc():
     _fill_task_proc.daemon = True
     _fill_task_proc.start()
 
-def start_exec_task_procs(thread_count=10):
+def start_exec_task_procs(thread_count):
     for i in range(thread_count):
         proc = Process(target=exec_task_action, name=f'proc-exec-task-{i}',
             args=(_share_dict, _lock, _task_queue, _finish_task_queue))
@@ -179,10 +186,10 @@ def start_exec_task_procs(thread_count=10):
     for proc in _exec_task_procs:
         proc.start()
 
-def start_clean_task_procs(thread_count=3):
+def start_clean_task_procs(thread_count):
     for i in range(thread_count):
         proc = Process(target=clean_task_action, name=f'proc-clean-task-{i}', 
-            args=(_share_dict, _lock, _finish_task_queue))
+            args=(_share_dict, _lock, _task_queue, _finish_task_queue))
         proc.daemon = True
         _clean_task_procs.append(proc)
     for proc in _clean_task_procs:
@@ -191,14 +198,22 @@ def start_clean_task_procs(thread_count=3):
 def run():
     global _share_dict
     manager = Manager()
-    _share_dict = manager.dict({'finish_count': 0})
+    _share_dict = manager.dict({'finish_count': 0, 'err_count': 0})
     start_fill_task_proc()
     time.sleep(1)
-    start_exec_task_procs()
-    time.sleep(1)
-    start_clean_task_procs()
-    while True:
-        time.sleep(1)
+    _share_dict['start_time'] = time.time()
+    start_exec_task_procs(15)
+    start_clean_task_procs(2)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        _fill_task_proc.terminate()
+        for proc in _exec_task_procs:
+            proc.terminate()
+        for proc in _clean_task_procs:
+            proc.terminate()
+        logger.info('KeyboardInterrupt')
 
 if __name__ == '__main__':
     run()
