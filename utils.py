@@ -11,6 +11,8 @@ import threading
 from functools import wraps
 from impala.util import as_pandas
 from hdfs.client import InsecureClient
+from multiprocessing_logging import install_mp_handler
+
 
 _config_path = os.path.dirname(__file__)
 _config_file = _config_path + '/config.ini' if _config_path != '' else 'config.ini'
@@ -32,6 +34,8 @@ _console_log_level = conf.get('logging', 'console_log_level')
 _console_handler.setLevel(_console_log_level)
 _console_handler.setFormatter(logging.Formatter(_log_format))
 logging.root.addHandler(_console_handler)
+
+install_mp_handler()
 
 logging.getLogger('impala').setLevel('ERROR')
 

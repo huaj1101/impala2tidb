@@ -42,6 +42,12 @@ class Task:
         self.err_msg: str = ''
         self.catalog: str = ''
 
+    def __str__(self) -> str:
+        return str(self.query_id)
+
+    def __repr__(self) -> str:
+        return str(self)
+
 def get_big_sql(query_id):
     logger.info(f'load big sql: {query_id}')
     sql = ''
@@ -52,7 +58,7 @@ def get_big_sql(query_id):
         logger.error(f'load big sql error: {e}')
     return sql
 
-def get_new_tasks(batch_size=300) -> List[Task]:
+def get_new_tasks(batch_size=1000) -> List[Task]:
     sql = f'select query_id, order_id, db, tidb_sql from test.translate_sqls \
             where execute_result is null and order_id > {_start_id} and tidb_sql != "" order by order_id limit {batch_size}'
     conn = utils.get_tidb_conn()
@@ -102,6 +108,7 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
             continue
         err_msg = ''
         duration = 0
+        # logger.info(f'task_start: {task.query_id}')
         conn = utils.get_tidb_conn()
         try:
             try:
@@ -121,8 +128,9 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
                     share_dict['err_count'] = share_dict['err_count'] + 1
                 # logger.error(f'{task.query_id} error')
         finally:
-            if conn:
+            if conn != None:
                 conn.close()
+        # logger.info(f'task_executed: {task}')
         task.exec_duration = duration
         task.exec_result = 0 if err_msg else 1
         task.err_msg = err_msg
@@ -139,6 +147,7 @@ def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Qu
                   execute_time = "{task.exec_time}" \
                 where query_id = "{task.query_id}"'
         utils.exec_tidb_sql(conn, sql)
+        # logger.info(f'task_cleaned: {task}')
         if task.exec_result == 0:
             if not task.catalog:
                 task.catalog = translate_utils.get_error_catalog(task.sql, task.err_msg)
@@ -147,6 +156,7 @@ def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Qu
                         values ("{task.query_id}", "{escape_string(task.err_msg)}", "{task.catalog}") \
                         on duplicate key update err_msg=values(err_msg), catalog=values(catalog)'
                 utils.exec_tidb_sql(conn, sql)
+            # logger.info(f'task_log_error: {task}')
         with lock:
             share_dict['finish_count'] = share_dict['finish_count'] + 1
             if share_dict['finish_count'] % 100 == 0:
@@ -187,7 +197,8 @@ def run():
     manager = Manager()
     _share_dict = manager.dict({'finish_count': 0, 'err_count': 0})
     start_fill_task_proc()
-    time.sleep(1)
+    while _task_queue.qsize() == 0:
+        time.sleep(0.1)
     _share_dict['start_time'] = time.time()
     start_exec_task_procs(15)
     start_clean_task_procs(5)
