@@ -7,6 +7,7 @@ import sys
 import os
 import time
 import pandas as pd
+import threading
 from functools import wraps
 from impala.util import as_pandas
 from hdfs.client import InsecureClient
@@ -36,6 +37,18 @@ logging.getLogger('impala').setLevel('ERROR')
 
 logger = logging.getLogger(__name__)
 thread_count = conf.getint('sys', 'threads', fallback=1)
+
+# 线程方法如果发生异常，必须在线程内捕获并记录，主线程得不到通知
+def thread_method(fn):
+    def fn_proxy(*args):
+        global has_error
+        try:
+            fn(*args)
+        except Exception as e:
+            msg = '%s error:\n%s' % (fn.__module__, e)
+            logger.error(msg)
+            has_error = True
+    return fn_proxy
 
 _tidb_engine = None
 def get_tidb_conn():
@@ -67,10 +80,33 @@ def _pre_process_tidb_sql(sql):
     sql = sql.replace(r'%', r'%%')
     return sql
 
-def exec_tidb_sql(conn: sqlalchemy.engine.Connection, sql: str):
+class TidbExecThread(threading.Thread):
+    def __init__(self, conn, sql):
+        threading.Thread.__init__(self)
+        self.conn = conn
+        self.sql = sql
+        self.err_msg = ''
+
+    def run(self):
+        try:
+            self.conn.execute(self.sql)
+        except Exception as e:
+            self.err_msg = str(e)
+
+def exec_tidb_sql(conn: sqlalchemy.engine.Connection, sql: str, timeout=0):
     sql = _pre_process_tidb_sql(sql)
     # logger.info(sql)
-    conn.execute(sql)
+    if timeout == 0:
+        conn.execute(sql)
+    else:
+        thread = TidbExecThread(conn, sql)
+        thread.setDaemon(True)
+        thread.start()
+        thread.join(timeout=timeout)
+        if thread.is_alive():
+            raise TimeoutError(f'timeout in {timeout} seconds')
+        if thread.err_msg:
+            raise Exception(thread.err_msg)
 
 def get_tidb_data(conn: sqlalchemy.engine.Connection, sql: str):
     sql = _pre_process_tidb_sql(sql)
@@ -150,17 +186,6 @@ def exec_impala_sql(cursor, sql, query_options=None):
         # print(sql)
         raise Exception(err_msg)
 
-# 线程方法如果发生异常，必须在线程内捕获并记录，主线程得不到通知
-def thread_method(fn):
-    def fn_proxy(*args):
-        global has_error
-        try:
-            fn(*args)
-        except Exception as e:
-            msg = '%s error:\n%s' % (fn.__module__, e)
-            logger.error(msg)
-            has_error = True
-    return fn_proxy
 
 def get_hdfs_client():
     return InsecureClient(conf.get('hdfs', 'name_node_url'), user=conf.get('hdfs', 'hdfs_user'))

@@ -40,6 +40,7 @@ class Task:
         self.exec_duration: float = 0
         self.exec_time: str = ''
         self.err_msg: str = ''
+        self.catalog: str = ''
 
 def get_big_sql(query_id):
     logger.info(f'load big sql: {query_id}')
@@ -107,15 +108,21 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
                 if task.db != 'default':
                     utils.exec_tidb_sql(conn, f'use {task.db}')
                 start = time.time()
-                utils.exec_tidb_sql(conn, task.sql)
+                utils.exec_tidb_sql(conn, task.sql, 20)
                 duration = time.time() - start
+            except TimeoutError as e:
+                err_msg = str(e)
+                task.catalog = 'timeout'
+                conn = None # conn被占住无法释放了
             except Exception as e:
                 err_msg = str(e)
+            if err_msg:
                 with lock:
                     share_dict['err_count'] = share_dict['err_count'] + 1
                 # logger.error(f'{task.query_id} error')
         finally:
-            conn.close()
+            if conn:
+                conn.close()
         task.exec_duration = duration
         task.exec_result = 0 if err_msg else 1
         task.err_msg = err_msg
@@ -133,10 +140,11 @@ def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Qu
                 where query_id = "{task.query_id}"'
         utils.exec_tidb_sql(conn, sql)
         if task.exec_result == 0:
-            catalog = translate_utils.get_error_catalog(task.sql, task.err_msg)
-            if catalog not in ('ignore_duplicate_insert', 'ignore_etl'):
-                sql = f'insert into test.execute_err (query_id, err_msg, catalog) \
-                        values ("{task.query_id}", "{escape_string(task.err_msg)}", "{catalog}") \
+            if not task.catalog:
+                task.catalog = translate_utils.get_error_catalog(task.sql, task.err_msg)
+            if task.catalog not in ('ignore_duplicate_insert', 'ignore_etl'):
+                sql = f'insert into test.translate_err (query_id, err_msg, catalog) \
+                        values ("{task.query_id}", "{escape_string(task.err_msg)}", "{task.catalog}") \
                         on duplicate key update err_msg=values(err_msg), catalog=values(catalog)'
                 utils.exec_tidb_sql(conn, sql)
         with lock:
