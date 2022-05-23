@@ -23,4 +23,6 @@ def get_error_catalog(sql: str, err_msg: str):
         return 'ignore_etl'
     if 'x__' in sql:
         return 'ignore_tableau'
+    if 'table' in err_msg and "doesn't exist" in err_msg:
+        return 'ignore_schema_mismatch'
     return 'not_processed'

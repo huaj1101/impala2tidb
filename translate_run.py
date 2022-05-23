@@ -138,25 +138,31 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
         finish_task_queue.put(task)
 
 def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Queue):
-    conn = utils.get_tidb_conn()
     while True:
-        task: Task = finish_task_queue.get(block=True)
-        sql = f'update test.translate_sqls set \
-                  tidb_duration = {task.exec_duration}, \
-                  execute_result = {task.exec_result}, \
-                  execute_time = "{task.exec_time}" \
-                where query_id = "{task.query_id}"'
-        utils.exec_tidb_sql(conn, sql)
-        # logger.info(f'task_cleaned: {task}')
-        if task.exec_result == 0:
-            if not task.catalog:
-                task.catalog = translate_utils.get_error_catalog(task.sql, task.err_msg)
-            if task.catalog not in ('ignore_duplicate_insert', 'ignore_etl'):
-                sql = f'insert into test.translate_err (query_id, err_msg, catalog) \
-                        values ("{task.query_id}", "{escape_string(task.err_msg)}", "{task.catalog}") \
-                        on duplicate key update err_msg=values(err_msg), catalog=values(catalog)'
+        conn = utils.get_tidb_conn()
+        try:
+            try:
+                task: Task = finish_task_queue.get(block=True)
+                sql = f'update test.translate_sqls set \
+                        tidb_duration = {task.exec_duration}, \
+                        execute_result = {task.exec_result}, \
+                        execute_time = "{task.exec_time}" \
+                        where query_id = "{task.query_id}"'
                 utils.exec_tidb_sql(conn, sql)
-            # logger.info(f'task_log_error: {task}')
+                # logger.info(f'task_cleaned: {task}')
+                if task.exec_result == 0:
+                    if not task.catalog:
+                        task.catalog = translate_utils.get_error_catalog(task.sql, task.err_msg)
+                    if task.catalog not in ('ignore_duplicate_insert', 'ignore_etl'):
+                        sql = f'insert into test.translate_err (query_id, err_msg, catalog) \
+                                values ("{task.query_id}", "{escape_string(task.err_msg)}", "{task.catalog}") \
+                                on duplicate key update err_msg=values(err_msg), catalog=values(catalog)'
+                        utils.exec_tidb_sql(conn, sql)
+                    # logger.info(f'task_log_error: {task}')
+            except Exception as e:
+                logger.error(f'clean task {task.query_id} error: {str(e)}')
+        finally:
+            conn.close()
         with lock:
             share_dict['finish_count'] = share_dict['finish_count'] + 1
             if share_dict['finish_count'] % 100 == 0:
