@@ -48,16 +48,22 @@ def run_one(query_id, catalog):
         conn = utils.get_tidb_conn()
     except Exception as e:
         err_msg = str(e)
+    execute_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if err_msg:
-        sql = f'update test.translate_sqls set execute_result = 0, tidb_sql = "{escape_string(tidb_sql)}" where query_id = "{query_id}"'
+        # print(err_msg)
+        sql = f'update test.translate_sqls set \
+                execute_result = 0, \
+                tidb_sql = "{escape_string(tidb_sql)}", \
+                execute_time = "{execute_time}" \
+                where query_id = "{query_id}"'
         utils.exec_tidb_sql(conn, sql)
         if not catalog:
             catalog = translate_utils.get_error_catalog(tidb_sql, err_msg)
-        sql = f'update test.translate_err set err_msg = "{escape_string(err_msg)}", catalog="{catalog}" where query_id = "{query_id}"'
+        sql = f'update test.translate_err set err_msg = "{escape_string(err_msg)}", catalog="{catalog}" \
+                where query_id = "{query_id}"'
         utils.exec_tidb_sql(conn, sql)
         conn.close()
         return False
-    execute_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     sql = f'update test.translate_sqls set \
                 tidb_sql = "{escape_string(tidb_sql)}", \
                 tidb_duration = {duration}, \
@@ -72,7 +78,7 @@ def run_one(query_id, catalog):
 
 def run():
     with utils.get_tidb_conn() as conn:
-        sql = 'select query_id, catalog from test.translate_err where catalog != "timeout"'
+        sql = 'select query_id, catalog from test.translate_err where catalog != "timeout" and catalog not like "modify_%"'
         df = utils.get_tidb_data(conn, sql)
     total_count = len(df)
     success_count = 0
