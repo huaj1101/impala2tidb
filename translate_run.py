@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 _start_id = 0
 _task_count_th = 3000
+_exsits_batch = []
 
 _task_queue = Queue()
 _finish_task_queue = Queue()
@@ -58,9 +59,21 @@ def get_big_sql(query_id):
         logger.error(f'load big sql error: {e}')
     return sql
 
-def get_new_tasks(batch_size=1000) -> List[Task]:
-    sql = f'select query_id, order_id, db, tidb_sql from test.translate_sqls \
-            where execute_result is null and order_id > {_start_id} and tidb_sql != "" order by order_id limit {batch_size}'
+def get_new_tasks(second_time, batch_size=1000) -> List[Task]:
+    if second_time:
+        exists_batch_ids = ','.join([f'"{query_id}"' for query_id in _exsits_batch])
+        if not exists_batch_ids:
+            exists_batch_ids = '""'
+        sql = f'select query_id, order_id, db, tidb_sql2 as tidb_sql from test.translate_sqls \
+                where execute_result2 is null and tidb_sql2 != "" and tidb_sql2 != tidb_sql \
+	            and query_id not in \
+                (select query_id from test.`translate_err` where catalog = "timeout" or catalog like "modify_%") \
+                and query_id not in ({exists_batch_ids}) \
+                limit {batch_size}'
+    else:
+        sql = f'select query_id, order_id, db, tidb_sql from test.translate_sqls \
+                where execute_result is null and order_id > {_start_id} and tidb_sql != "" order by order_id limit {batch_size}'
+
     conn = utils.get_tidb_conn()
     try:
         df = utils.get_tidb_data(conn, sql)
@@ -77,15 +90,21 @@ def get_new_tasks(batch_size=1000) -> List[Task]:
         if task.sql == 'big_sql':
             task.sql = get_big_sql(task.query_id)
         if task.sql and task.db:
-            result.append(task) 
+            result.append(task)
+        if second_time:
+            _exsits_batch.append(task.query_id)
+    if second_time and len(_exsits_batch) > batch_size:
+        for i in range(batch_size // 2):
+            del _exsits_batch[0]
     return result
 
 def fill_task_action(share_dict, lock, task_queue: Queue):
     global _start_id
+    second_time = share_dict['second_time']
     while True:
         if task_queue.qsize() < _task_count_th:
             try:
-                tasks = get_new_tasks()
+                tasks = get_new_tasks(second_time)
             except Exception as e:
                 logger.error(f'get tasks error: {e}')
                 time.sleep(1)
@@ -94,7 +113,10 @@ def fill_task_action(share_dict, lock, task_queue: Queue):
                 task_queue.put(task)
             if len(tasks) > 0:
                 _start_id = tasks[-1].order_id
-                # logger.info(f'fill {len(tasks)} tasks, queue size: {task_queue.qsize()}')
+                if second_time:
+                    logger.info(f'fill {len(tasks)} tasks, queue size: {task_queue.qsize()}')
+            else:
+                time.sleep(1)
         else:
             time.sleep(1)
 
@@ -138,14 +160,19 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
         finish_task_queue.put(task)
 
 def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Queue):
+    second_time = share_dict['second_time']
+    col = 'execute_result2' if second_time else 'execute_result'
     while True:
         conn = utils.get_tidb_conn()
+        start = time.time()
+        wait_so_long = False
         try:
             try:
                 task: Task = finish_task_queue.get(block=True)
+                wait_so_long = time.time() - start > 10
                 sql = f'update test.translate_sqls set \
                         tidb_duration = {task.exec_duration}, \
-                        execute_result = {task.exec_result}, \
+                        {col} = {task.exec_result}, \
                         execute_time = "{task.exec_time}" \
                         where query_id = "{task.query_id}"'
                 utils.exec_tidb_sql(conn, sql)
@@ -165,7 +192,7 @@ def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Qu
             conn.close()
         with lock:
             share_dict['finish_count'] = share_dict['finish_count'] + 1
-            if share_dict['finish_count'] % 100 == 0:
+            if share_dict['finish_count'] % 100 == 0 or wait_so_long:
                 msg = f'finish: {share_dict["finish_count"]}, '
                 msg = msg + f'tps: {round(share_dict["finish_count"] / (time.time() - share_dict["start_time"]))}, '
                 msg = msg + f'fail: {share_dict["err_count"]}, '
@@ -198,10 +225,13 @@ def start_clean_task_procs(thread_count):
     for proc in _clean_task_procs:
         proc.start()
 
-def run():
+def run(second_time):
     global _share_dict
     manager = Manager()
-    _share_dict = manager.dict({'finish_count': 0, 'err_count': 0})
+    _share_dict = manager.dict()
+    _share_dict['finish_count'] = 0
+    _share_dict['err_count'] = 0
+    _share_dict['second_time'] = second_time
     start_fill_task_proc()
     while _task_queue.qsize() == 0:
         time.sleep(0.1)
@@ -220,4 +250,7 @@ def run():
         logger.info('KeyboardInterrupt')
 
 if __name__ == '__main__':
-    run()
+    second_time = False
+    if len(sys.argv) == 2 and sys.argv[1] == 'second':
+        second_time = True
+    run(second_time)

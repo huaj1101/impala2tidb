@@ -64,6 +64,8 @@ def save_big_sql(query_id, sql):
 
 def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Queue):
     conn = utils.get_tidb_conn()
+    sql_date = share_dict['sql_date']
+    second_time = share_dict['second_time']
     while True:
         try:
             task = task_queue.get(block=True)
@@ -83,10 +85,14 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
             if '_parquet_' in impala_sql or 'NDV(' in impala_sql or 'background:true' in impala_sql:
                 finish_task_queue.put(query_id)
                 continue
-            sql = 'insert into test.translate_sqls (query_id, order_id, hash_id, tenant, db, sql_type, impala_sql, impala_duration, tidb_sql)' +\
+            if second_time:
+                col = 'tidb_sql2'
+            else:
+                col = 'tidb_sql'
+            sql = f'insert into test.translate_sqls (query_id, order_id, hash_id, tenant, db, sql_type, impala_sql, impala_duration, {col}, sql_date)' +\
                     f'values("{query_id}", nextval(test.seq), "{hash_id}", "{tenant}", "{db}", "{sql_type}", "{escape_string(impala_sql)}", \
-                        {impala_duration}, "{escape_string(tidb_sql)}")' +\
-                    'on duplicate key update tidb_sql=values(tidb_sql)'
+                        {impala_duration}, "{escape_string(tidb_sql)}", "{sql_date}")' +\
+                    f'on duplicate key update {col}=values({col})'
             sql_err = ''
             if not task['success']:
                 err_msg = task['error']
@@ -166,12 +172,14 @@ def do_clean():
     with utils.get_impala_cursor() as cursor:
         utils.exec_impala_sql(cursor, sql)
 
-def run():
+def run(second_time):
     do_clean()
     global _share_dict
     manager = Manager()
     _share_dict = manager.dict()
+    _share_dict['sql_date'] = _date
     _share_dict['start_time'] = time.time()
+    _share_dict['second_time'] = second_time
     start_fill_task_proc()
     start_exec_task_procs(5)
     start_clean_task_proc()
@@ -186,4 +194,7 @@ def run():
         logger.info('KeyboardInterrupt')
 
 if __name__ == '__main__':
-    run()
+    second_time = False
+    if len(sys.argv) == 2 and sys.argv[1] == 'second':
+        second_time = True
+    run(second_time)
