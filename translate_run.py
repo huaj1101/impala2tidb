@@ -32,11 +32,12 @@ _share_dict = None
 _lock = Lock()
 
 class Task:
-    def __init__(self, query_id, order_id, db, sql) -> None:
+    def __init__(self, query_id, order_id, db, sql, sql_type) -> None:
         self.query_id: str = query_id
         self.order_id: int = order_id
         self.db: str = db
         self.sql: str = sql
+        self.sql_type: str = sql_type
         self.exec_result: int = -1
         self.exec_duration: float = 0
         self.exec_time: str = ''
@@ -64,14 +65,14 @@ def get_new_tasks(second_time, batch_size=1000) -> List[Task]:
         exists_batch_ids = ','.join([f'"{query_id}"' for query_id in _exsits_batch])
         if not exists_batch_ids:
             exists_batch_ids = '""'
-        sql = f'select query_id, order_id, db, tidb_sql2 as tidb_sql from test.translate_sqls \
+        sql = f'select query_id, sql_type, order_id, db, tidb_sql2 as tidb_sql from test.translate_sqls \
                 where execute_result2 is null and tidb_sql2 != "" and tidb_sql2 != tidb_sql \
 	            and query_id not in \
-                (select query_id from test.`translate_err` where catalog = "timeout" or catalog like "modify_%") \
+                (select query_id from test.`translate_err` where catalog in ("timeout", "delay") or catalog like "modify_%") \
                 and query_id not in ({exists_batch_ids}) \
                 limit {batch_size}'
     else:
-        sql = f'select query_id, order_id, db, tidb_sql from test.translate_sqls \
+        sql = f'select query_id, sql_type, order_id, db, tidb_sql from test.translate_sqls \
                 where execute_result is null and order_id > {_start_id} and tidb_sql != "" order by order_id limit {batch_size}'
 
     conn = utils.get_tidb_conn()
@@ -85,7 +86,8 @@ def get_new_tasks(second_time, batch_size=1000) -> List[Task]:
             df.at[i, 'query_id'],
             df.at[i, 'order_id'],
             df.at[i, 'db'],
-            df.at[i, 'tidb_sql']
+            df.at[i, 'tidb_sql'],
+            df.at[i, 'sql_type']
             )
         if task.sql == 'big_sql':
             task.sql = get_big_sql(task.query_id)
@@ -136,6 +138,8 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
             try:
                 if task.db != 'default':
                     utils.exec_tidb_sql(conn, f'use {task.db}')
+                if task.sql_type == 'Query':
+                    utils.exec_tidb_sql(conn, 'set @@session.tidb_isolation_read_engines = "tidb,tiflash"')
                 start = time.time()
                 utils.exec_tidb_sql(conn, task.sql, 20)
                 duration = time.time() - start

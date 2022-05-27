@@ -21,7 +21,7 @@ def get_error_catalog(sql: str, err_msg: str):
         return 'modify_func_not_support'
     if 'background:true' in sql:
         return 'ignore_etl'
-    if 'x__' in sql:
+    if 'x___' in sql:
         return 'ignore_tableau'
     if 'table' in err_msg and "doesn't exist" in err_msg:
         return 'ignore_schema_mismatch'

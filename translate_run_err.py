@@ -16,7 +16,7 @@ from pymysql.converters import escape_string
 logger = logging.getLogger(__name__)
 _date = utils.conf.get('translate-api', 'date')
 
-def run_one(query_id, catalog):
+def run_one(query_id, sql_type, catalog):
     host = utils.conf.get('translate-api', 'host')
     url = f'{host}/transfer-by-id?table_postfix={_date}&query_id={query_id}'
     try:
@@ -39,6 +39,8 @@ def run_one(query_id, catalog):
         catalog = ''
         if db != 'default':
             utils.exec_tidb_sql(conn, f'use {db}')
+        if sql_type == 'Query':
+            utils.exec_tidb_sql(conn, 'set @@session.tidb_isolation_read_engines = "tidb,tiflash"')
         start = time.time()
         utils.exec_tidb_sql(conn, tidb_sql, 20)
         duration = time.time() - start
@@ -49,6 +51,8 @@ def run_one(query_id, catalog):
     except Exception as e:
         err_msg = str(e)
     execute_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if sql_type == 'Query':
+        utils.exec_tidb_sql(conn, 'set @@session.tidb_isolation_read_engines = "tikv,tidb,tiflash"')
     if err_msg:
         # print(err_msg)
         sql = f'update test.translate_sqls set \
@@ -78,15 +82,17 @@ def run_one(query_id, catalog):
 
 def run():
     with utils.get_tidb_conn() as conn:
-        sql = 'select query_id, catalog from test.translate_err where catalog != "timeout" and catalog not like "modify_%"'
+        sql = 'select te.query_id, ts.sql_type, te.catalog from test.translate_err te \
+               join test.`translate_sqls` ts on ts.`query_id` = te.`query_id` \
+               where te.catalog not in ("timeout", "delay") and te.catalog not like "modify_%"'
         df = utils.get_tidb_data(conn, sql)
     total_count = len(df)
     success_count = 0
     for i in range(total_count):
         query_id = df.at[i, 'query_id']
-        # logger.info(query_id)
+        sql_type = df.at[i, 'sql_type']
         catalog = df.at[i, 'catalog']
-        if run_one(query_id, catalog):
+        if run_one(query_id, sql_type, catalog):
             success_count += 1
             logger.info(f'{i+1} / {total_count} {query_id} success now')
         else:
