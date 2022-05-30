@@ -158,7 +158,7 @@ def get_db_schema(db, total_count):
 @utils.timeit
 def main():
     dbs = utils.get_impala_dbs()
-    dbs = ['global_mtlp']
+    # dbs = ['global_mtlp']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for db in dbs:
         pool.submit(get_db_schema, db, len(dbs))

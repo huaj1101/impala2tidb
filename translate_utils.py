@@ -5,8 +5,6 @@ import utils
 logger = logging.getLogger(__name__)
 
 def _translate_str_length(length):
-    if length <= 50:
-        return 50
     if length <= 255:
         return 255
     if length <= 2000:
@@ -94,12 +92,12 @@ def get_error_catalog(sql: str, err_msg: str):
     if 'cannot be null' in err_msg:
         return 'modify_wrong_sql'
     if 'invalid transaction' in err_msg:
-        return 'delay_too_many_union'
+        return 'delay'
     if 'regexp_replace' in sql or 'regexp_extract' in sql or 'instr(' in sql:
         return 'modify_func_not_support'
     if 'background:true' in sql:
         return 'ignore_etl'
-    if 'x___' in sql:
+    if 'x___' in sql or '/*& requestId' in sql:
         return 'ignore_tableau'
     if 'table' in err_msg and "doesn't exist" in err_msg:
         return 'ignore_schema_mismatch'

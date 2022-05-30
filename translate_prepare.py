@@ -109,7 +109,7 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
                     sql_err = ''
                     big_sql = ''
             # tableau的数据源都要重新做，排除这些sql不处理
-            if 'x___' in impala_sql:
+            if 'x___' in impala_sql or '/*& requestId' in impala_sql:
                 sql = ''
                 sql_err = ''
                 big_sql = ''
