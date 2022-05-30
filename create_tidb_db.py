@@ -48,7 +48,7 @@ def main():
         if file.endswith('.json'):
             files.append(file)
     files.sort()
-    files = ['global_mtlp.json']
+    # files = ['global_mtlp.json']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for file in files:
         db = file.replace('.json', '')

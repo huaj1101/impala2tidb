@@ -5,6 +5,8 @@ import utils
 logger = logging.getLogger(__name__)
 
 def _translate_str_length(length):
+    if length <= 50:
+        return 50
     if length <= 255:
         return 255
     if length <= 2000:
