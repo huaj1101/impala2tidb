@@ -85,7 +85,7 @@ def run():
     with utils.get_tidb_conn() as conn:
         sql = 'select te.query_id, ts.sql_type, te.catalog from test.translate_err te \
                join test.`translate_sqls` ts on ts.`query_id` = te.`query_id` \
-               where te.catalog not in ("timeout", "delay") and te.catalog not like "modify_%"'
+               where te.catalog in ("not_processed")'
         df = utils.get_tidb_data(conn, sql)
     total_count = len(df)
     success_count = 0
