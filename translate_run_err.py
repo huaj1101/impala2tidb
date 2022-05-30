@@ -14,10 +14,11 @@ import requests
 from pymysql.converters import escape_string
 
 logger = logging.getLogger(__name__)
-_date = utils.conf.get('translate-api', 'date')
+_date = utils.conf.get('translate', 'date')
+_tiflash_only = utils.conf.getint('translate', 'tiflash_only')
 
 def run_one(query_id, sql_type, catalog):
-    host = utils.conf.get('translate-api', 'host')
+    host = utils.conf.get('translate', 'api-host')
     url = f'{host}/transfer-by-id?table_postfix={_date}&query_id={query_id}'
     try:
         response = requests.get(url)
@@ -39,7 +40,7 @@ def run_one(query_id, sql_type, catalog):
         catalog = ''
         if db != 'default':
             utils.exec_tidb_sql(conn, f'use {db}')
-        if sql_type == 'Query':
+        if _tiflash_only == 1 and sql_type == 'Query':
             utils.exec_tidb_sql(conn, 'set @@session.tidb_isolation_read_engines = "tidb,tiflash"')
         start = time.time()
         utils.exec_tidb_sql(conn, tidb_sql, 20)
@@ -51,7 +52,7 @@ def run_one(query_id, sql_type, catalog):
     except Exception as e:
         err_msg = str(e)
     execute_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    if sql_type == 'Query':
+    if _tiflash_only == 1:
         utils.exec_tidb_sql(conn, 'set @@session.tidb_isolation_read_engines = "tikv,tidb,tiflash"')
     if err_msg:
         # print(err_msg)

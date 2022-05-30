@@ -28,11 +28,11 @@ _clean_task_proc: Process = None
 _share_dict = None
 _lock = Lock()
 
-_batch_size = utils.conf.getint('translate-api', 'batch')
-_date = utils.conf.get('translate-api', 'date')
+_batch_size = utils.conf.getint('translate', 'batch')
+_date = utils.conf.get('translate', 'date')
 
 def get_new_tasks():
-    host = utils.conf.get('translate-api', 'host')
+    host = utils.conf.get('translate', 'api-host')
     url = f'{host}/translate?batch_size={_batch_size}&table_postfix={_date}'
     response = requests.get(url)
     if response.status_code != 200:
@@ -96,8 +96,8 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
             sql_err = ''
             if not task['success']:
                 err_msg = task['error']
-                sql_err = 'insert into test.translate_err (query_id, err_msg, catalog)' +\
-                    f'values("{query_id}", "{escape_string(err_msg)}", "translate_error")' +\
+                sql_err = 'insert into test.translate_err (query_id, sql_date, hash_id, err_msg, catalog)' +\
+                    f'values("{query_id}", "{_date}", "{hash_id}", "{escape_string(err_msg)}", "translate_error")' +\
                     'on duplicate key update err_msg=values(err_msg)'
                 # 一些已知的问题跳过不存
                 err_msg_lower = err_msg.lower()

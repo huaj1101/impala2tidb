@@ -18,6 +18,8 @@ from multiprocessing import Process, Queue, Manager, Lock
 logger = logging.getLogger(__name__)
 
 _start_id = 0
+_date = utils.conf.get('translate', 'date')
+_tiflash_only = utils.conf.getint('translate', 'tiflash_only')
 _task_count_th = 3000
 _exsits_batch = []
 
@@ -32,12 +34,13 @@ _share_dict = None
 _lock = Lock()
 
 class Task:
-    def __init__(self, query_id, order_id, db, sql, sql_type) -> None:
+    def __init__(self, query_id, order_id, db, sql, sql_type, hash_id) -> None:
         self.query_id: str = query_id
         self.order_id: int = order_id
         self.db: str = db
         self.sql: str = sql
         self.sql_type: str = sql_type
+        self.hash_id: str = hash_id
         self.exec_result: int = -1
         self.exec_duration: float = 0
         self.exec_time: str = ''
@@ -65,15 +68,16 @@ def get_new_tasks(second_time, batch_size=1000) -> List[Task]:
         exists_batch_ids = ','.join([f'"{query_id}"' for query_id in _exsits_batch])
         if not exists_batch_ids:
             exists_batch_ids = '""'
-        sql = f'select query_id, sql_type, order_id, db, tidb_sql2 as tidb_sql from test.translate_sqls \
-                where execute_result2 is null and tidb_sql2 != "" and tidb_sql2 != tidb_sql \
+        sql = f'select query_id, hash_id, sql_type, order_id, db, tidb_sql2 as tidb_sql from test.translate_sqls \
+                where sql_date = "{_date}" and execute_result2 is null and tidb_sql2 != "" and tidb_sql2 != tidb_sql \
 	            and query_id not in \
                 (select query_id from test.`translate_err` where catalog in ("timeout", "delay") or catalog like "modify_%") \
                 and query_id not in ({exists_batch_ids}) \
                 limit {batch_size}'
     else:
-        sql = f'select query_id, sql_type, order_id, db, tidb_sql from test.translate_sqls \
-                where execute_result is null and order_id > {_start_id} and tidb_sql != "" order by order_id limit {batch_size}'
+        sql = f'select query_id, hash_id, sql_type, order_id, db, tidb_sql from test.translate_sqls \
+                where sql_date = "{_date}" and execute_result is null and order_id > {_start_id} \
+                    and tidb_sql != "" order by order_id limit {batch_size}'
 
     conn = utils.get_tidb_conn()
     try:
@@ -87,7 +91,8 @@ def get_new_tasks(second_time, batch_size=1000) -> List[Task]:
             df.at[i, 'order_id'],
             df.at[i, 'db'],
             df.at[i, 'tidb_sql'],
-            df.at[i, 'sql_type']
+            df.at[i, 'sql_type'],
+            df.at[i, 'hash_id']
             )
         if task.sql == 'big_sql':
             task.sql = get_big_sql(task.query_id)
@@ -138,8 +143,11 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
             try:
                 if task.db != 'default':
                     utils.exec_tidb_sql(conn, f'use {task.db}')
-                if task.sql_type == 'Query':
-                    utils.exec_tidb_sql(conn, 'set @@session.tidb_isolation_read_engines = "tidb,tiflash"')
+                if _tiflash_only == 1:
+                    if task.sql_type == 'Query':
+                        utils.exec_tidb_sql(conn, 'set @@session.tidb_isolation_read_engines = "tidb,tiflash"')
+                    else:
+                        utils.exec_tidb_sql(conn, 'set @@session.tidb_isolation_read_engines = "tikv,tidb,tiflash"')
                 start = time.time()
                 utils.exec_tidb_sql(conn, task.sql, 20)
                 duration = time.time() - start
@@ -149,10 +157,6 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
                 conn = None # conn被占住无法释放了
             except Exception as e:
                 err_msg = str(e)
-            if err_msg:
-                with lock:
-                    share_dict['err_count'] = share_dict['err_count'] + 1
-                # logger.error(f'{task.query_id} error')
         finally:
             if conn != None:
                 conn.close()
@@ -185,10 +189,12 @@ def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Qu
                     if not task.catalog:
                         task.catalog = translate_utils.get_error_catalog(task.sql, task.err_msg)
                     if task.catalog not in ('ignore_duplicate_insert', 'ignore_etl'):
-                        sql = f'insert into test.translate_err (query_id, err_msg, catalog) \
-                                values ("{task.query_id}", "{escape_string(task.err_msg)}", "{task.catalog}") \
+                        sql = f'insert into test.translate_err (query_id, sql_date, hash_id, err_msg, catalog) \
+                                values ("{task.query_id}", "{_date}", "{task.hash_id}", "{escape_string(task.err_msg)}", "{task.catalog}") \
                                 on duplicate key update err_msg=values(err_msg), catalog=values(catalog)'
                         utils.exec_tidb_sql(conn, sql)
+                        with lock:
+                            share_dict['err_count'] = share_dict['err_count'] + 1
                     # logger.info(f'task_log_error: {task}')
             except Exception as e:
                 logger.error(f'clean task {task.query_id} error: {str(e)}')
