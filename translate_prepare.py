@@ -82,7 +82,8 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
                 impala_sql = tidb_sql = 'big_sql'
             else:
                 big_sql = ''
-            if '_parquet_' in impala_sql or 'NDV(' in impala_sql or 'background:true' in impala_sql:
+            if '_parquet_' in impala_sql or 'NDV(' in impala_sql or 'background:true' in impala_sql \
+                or 'impala_query_log' in impala_sql:
                 finish_task_queue.put(query_id)
                 continue
             if second_time:
