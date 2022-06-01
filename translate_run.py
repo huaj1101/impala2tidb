@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 
 _start_id = 0
 _date = utils.conf.get('translate', 'date')
-_tiflash_only = utils.conf.getint('translate', 'tiflash_only')
+_tiflash_only = utils.conf.getboolean('translate', 'tiflash_only', fallback=False)
+_auto_commit = utils.conf.getboolean('translate', 'auto_commit', fallback=False)
 _task_count_th = 3000
 _exsits_batch = []
 
@@ -138,18 +139,20 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
         err_msg = ''
         duration = 0
         # logger.info(f'task_start: {task.query_id}')
-        conn = utils.get_tidb_conn()
+        conn = utils.get_tidb_conn(_auto_commit)
         try:
             try:
                 if task.db != 'default':
                     utils.exec_tidb_sql(conn, f'use {task.db}')
-                if _tiflash_only == 1:
+                if _tiflash_only:
                     if task.sql_type == 'Query':
                         utils.exec_tidb_sql(conn, 'set @@session.tidb_isolation_read_engines = "tidb,tiflash"')
                     else:
                         utils.exec_tidb_sql(conn, 'set @@session.tidb_isolation_read_engines = "tikv,tidb,tiflash"')
                 start = time.time()
                 utils.exec_tidb_sql(conn, task.sql, 20)
+                if not _auto_commit and task.sql_type != 'Query':
+                    utils.exec_tidb_sql(conn, 'commit')
                 duration = time.time() - start
             except TimeoutError as e:
                 err_msg = str(e)

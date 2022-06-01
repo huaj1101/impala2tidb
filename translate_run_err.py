@@ -15,7 +15,8 @@ from pymysql.converters import escape_string
 
 logger = logging.getLogger(__name__)
 _date = utils.conf.get('translate', 'date')
-_tiflash_only = utils.conf.getint('translate', 'tiflash_only')
+_tiflash_only = utils.conf.getboolean('translate', 'tiflash_only', fallback=False)
+_auto_commit = utils.conf.getboolean('translate', 'auto_commit', fallback=False)
 
 def run_one(query_id, sql_type, catalog):
     host = utils.conf.get('translate', 'api-host')
@@ -35,15 +36,17 @@ def run_one(query_id, sql_type, catalog):
     db = response.headers['x-session-db']
     tidb_sql = response.text
     try:
-        conn = utils.get_tidb_conn()
+        conn = utils.get_tidb_conn(_auto_commit)
         err_msg = ''
         catalog = ''
         if db != 'default':
             utils.exec_tidb_sql(conn, f'use {db}')
-        if _tiflash_only == 1 and sql_type == 'Query':
+        if _tiflash_only and sql_type == 'Query':
             utils.exec_tidb_sql(conn, 'set @@session.tidb_isolation_read_engines = "tidb,tiflash"')
         start = time.time()
         utils.exec_tidb_sql(conn, tidb_sql, 20)
+        if not _auto_commit and sql_type != 'Query':
+            utils.exec_tidb_sql(conn, 'commit')
         duration = time.time() - start
     except TimeoutError as e:
         err_msg = str(e)
@@ -52,7 +55,7 @@ def run_one(query_id, sql_type, catalog):
     except Exception as e:
         err_msg = str(e)
     execute_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    if _tiflash_only == 1:
+    if _tiflash_only:
         utils.exec_tidb_sql(conn, 'set @@session.tidb_isolation_read_engines = "tikv,tidb,tiflash"')
     if err_msg:
         # print(err_msg)
@@ -67,6 +70,8 @@ def run_one(query_id, sql_type, catalog):
         sql = f'update test.translate_err set err_msg = "{escape_string(err_msg)}", catalog="{catalog}" \
                 where query_id = "{query_id}"'
         utils.exec_tidb_sql(conn, sql)
+        if not _auto_commit:
+            utils.exec_tidb_sql(conn, 'commit')
         conn.close()
         return False
     sql = f'update test.translate_sqls set \
@@ -78,6 +83,8 @@ def run_one(query_id, sql_type, catalog):
     utils.exec_tidb_sql(conn, sql)
     sql = f'delete from test.translate_err where query_id = "{query_id}"'
     utils.exec_tidb_sql(conn, sql)
+    if not _auto_commit:
+        utils.exec_tidb_sql(conn, 'commit')
     conn.close()
     return True
 

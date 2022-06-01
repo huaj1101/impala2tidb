@@ -1,4 +1,5 @@
 import configparser
+from enum import auto
 import impala.dbapi
 from pymysql import paramstyle
 import sqlalchemy
@@ -55,7 +56,7 @@ def thread_method(fn):
     return fn_proxy
 
 _tidb_engine = None
-def get_tidb_conn():
+def get_tidb_conn(autocommit=True):
     global _tidb_engine
     if _tidb_engine is None:
         host = conf.get('tidb', 'host')
@@ -65,7 +66,12 @@ def get_tidb_conn():
         db = conf.get('tidb', 'db')
         con_str = f'mysql+mysqldb://{user}:{pwd}@{host}:{port}/{db}?charset=utf8'
         _tidb_engine = sqlalchemy.create_engine(con_str)
-    return _tidb_engine.connect()
+    conn = _tidb_engine.connect()
+    if autocommit:
+        conn.execute('set autocommit=1')
+    else:
+        conn.execute('set autocommit=0')
+    return conn
 
 # _dimmodel_engine = None
 # def get_dim_model_conn():
