@@ -139,7 +139,10 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
         err_msg = ''
         duration = 0
         # logger.info(f'task_start: {task.query_id}')
-        conn = utils.get_tidb_conn(_auto_commit)
+        if task.sql_type == 'Query':
+            conn = utils.get_tidb_conn(_auto_commit)
+        else:
+            conn = utils.get_tidb_conn()
         try:
             try:
                 if task.db != 'default':
@@ -151,8 +154,6 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
                         utils.exec_tidb_sql(conn, 'set @@session.tidb_isolation_read_engines = "tikv,tidb,tiflash"')
                 start = time.time()
                 utils.exec_tidb_sql(conn, task.sql, 20)
-                if not _auto_commit and task.sql_type != 'Query':
-                    utils.exec_tidb_sql(conn, 'commit')
                 duration = time.time() - start
             except TimeoutError as e:
                 err_msg = str(e)
