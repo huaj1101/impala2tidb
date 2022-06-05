@@ -15,7 +15,6 @@ from pymysql.converters import escape_string
 
 logger = logging.getLogger(__name__)
 _date = utils.conf.get('translate', 'date')
-_auto_commit = utils.conf.getboolean('translate', 'auto_commit', fallback=False)
 
 def run_one(query_id, sql_type, catalog, tiflash_only):
     host = utils.conf.get('translate', 'api-host')
@@ -43,11 +42,10 @@ def run_one(query_id, sql_type, catalog, tiflash_only):
         catalog = ''
         if db != 'default':
             utils.exec_tidb_sql(conn, f'use {db}')
-        if tiflash_only and sql_type == 'Query':
-            utils.exec_tidb_sql(conn, 'set @@session.tidb_isolation_read_engines = "tidb,tiflash"')
         start = time.time()
         utils.exec_tidb_sql(conn, tidb_sql, 20)
         duration = time.time() - start
+        conn.close()
     except TimeoutError as e:
         err_msg = str(e)
         catalog = 'timeout'
@@ -56,7 +54,7 @@ def run_one(query_id, sql_type, catalog, tiflash_only):
     execute_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = utils.get_tidb_conn()
     if err_msg:
-        # print(err_msg)
+        #print(err_msg)
         sql = f'update test.translate_sqls set \
                 execute_result = 0, \
                 tidb_sql = "{escape_string(tidb_sql)}", \
@@ -68,8 +66,6 @@ def run_one(query_id, sql_type, catalog, tiflash_only):
         sql = f'update test.translate_err set err_msg = "{escape_string(err_msg)}", catalog="{catalog}" \
                 where query_id = "{query_id}"'
         utils.exec_tidb_sql(conn, sql)
-        if not _auto_commit:
-            utils.exec_tidb_sql(conn, 'commit')
         conn.close()
         return False
     sql = f'update test.translate_sqls set \
@@ -88,7 +84,7 @@ def run():
     with utils.get_tidb_conn() as conn:
         sql = 'select te.query_id, ts.sql_type, te.catalog, ts.tiflash_only from test.translate_err te \
                join test.`translate_sqls` ts on ts.`query_id` = te.`query_id` \
-               where te.catalog in ("not_processed") and te.sql_date="518"'
+               where te.catalog in ("delay") and te.sql_date="519"'
         df = utils.get_tidb_data(conn, sql)
     total_count = len(df)
     success_count = 0

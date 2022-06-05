@@ -16,7 +16,7 @@ from pymysql.converters import escape_string
 logger = logging.getLogger(__name__)
 
 def run():
-    batch = 3
+    batch = 8
     conn = utils.get_tidb_conn()
     try:
         for i in range(batch):

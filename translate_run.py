@@ -19,7 +19,6 @@ logger = logging.getLogger(__name__)
 
 _start_id = 0
 _date = utils.conf.get('translate', 'date')
-# _auto_commit = utils.conf.getboolean('translate', 'auto_commit', fallback=False)
 _limit_count = utils.conf.getint('translate', 'limit_count', fallback=0)
 _task_count_th = 3000
 _exsits_batch = []
