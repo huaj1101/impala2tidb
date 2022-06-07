@@ -122,6 +122,8 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
                 utils.exec_tidb_sql(conn, sql)
             if sql_err:
                 utils.exec_tidb_sql(conn, sql_err)
+                with lock:
+                    share_dict['error_count'] = share_dict['error_count'] + 1
             if big_sql:
                 save_big_sql(query_id, big_sql)
             finish_task_queue.put(query_id)
@@ -144,7 +146,7 @@ def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Qu
         except Exception as e:
             logger.error(f'save impala result error: {e}')
             time.sleep(1)
-        msg = f'finish: {finish_count}, '
+        msg = f'finish: {finish_count}, fail: {share_dict["error_count"]}, '
         msg = msg + f'tps: {round(finish_count / (time.time() - share_dict["start_time"]))}, '
         msg = msg + f'queue: {task_queue.qsize()}, '
         msg = msg + f'to_clean: {finish_task_queue.qsize()}'
@@ -186,6 +188,7 @@ def run(second_time):
     _share_dict['sql_date'] = _date
     _share_dict['start_time'] = time.time()
     _share_dict['second_time'] = second_time
+    _share_dict['error_count'] = 0
     start_fill_task_proc()
     start_exec_task_procs(5)
     start_clean_task_proc()
