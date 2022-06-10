@@ -21,7 +21,7 @@ _task_count_th = 3000
 _task_queue = Queue()
 _finish_task_queue = Queue()
 
-_fill_task_proc: Process = None
+_fill_task_procs: List[Process] = []
 _exec_task_procs: List[Process] = []
 _clean_task_proc: Process = None
 
@@ -152,12 +152,14 @@ def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Qu
         msg = msg + f'to_clean: {finish_task_queue.qsize()}'
         logger.info(msg)
 
-def start_fill_task_proc():
-    global _fill_task_proc
-    _fill_task_proc = Process(target=fill_task_action, name='proc-fill-task', 
-        args=(_share_dict, _lock, _task_queue))
-    _fill_task_proc.daemon = True
-    _fill_task_proc.start()
+def start_fill_task_procs(thread_count):
+    for i in range(thread_count):
+        proc = Process(target=fill_task_action, name=f'proc-fill-task-{i}', 
+            args=(_share_dict, _lock, _task_queue))
+        proc.daemon = True
+        _fill_task_procs.append(proc)
+    for proc in _fill_task_procs:
+        proc.start()
 
 def start_exec_task_procs(thread_count):
     for i in range(thread_count):
@@ -189,14 +191,15 @@ def run(second_time):
     _share_dict['start_time'] = time.time()
     _share_dict['second_time'] = second_time
     _share_dict['error_count'] = 0
-    start_fill_task_proc()
+    start_fill_task_procs(5)
     start_exec_task_procs(5)
     start_clean_task_proc()
     try:
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        _fill_task_proc.terminate()
+        for proc in _fill_task_procs:
+            proc.terminate()
         for proc in _exec_task_procs:
             proc.terminate()
         _clean_task_proc.terminate()

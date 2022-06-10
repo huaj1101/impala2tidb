@@ -9,8 +9,10 @@ import os
 import time
 import pandas as pd
 import threading
+import traceback
 from functools import wraps
 from impala.util import as_pandas
+import hdfs
 from hdfs.client import InsecureClient
 from multiprocessing_logging import install_mp_handler
 
@@ -39,6 +41,7 @@ logging.root.addHandler(_console_handler)
 install_mp_handler()
 
 logging.getLogger('impala').setLevel('ERROR')
+hdfs.client._logger.setLevel('ERROR')
 
 logger = logging.getLogger(__name__)
 thread_count = conf.getint('sys', 'threads', fallback=1)
@@ -51,7 +54,8 @@ def thread_method(fn):
             fn(*args)
         except Exception as e:
             msg = '%s error:\n%s' % (fn.__module__, e)
-            logger.error(msg)
+            trace = traceback.format_exc()
+            logger.error(msg + '\n' + trace)
             has_error = True
     return fn_proxy
 

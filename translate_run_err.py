@@ -84,7 +84,7 @@ def run():
     with utils.get_tidb_conn() as conn:
         sql = f'select te.query_id, ts.sql_type, te.catalog, ts.tiflash_only from test.translate_err te \
                 join test.`translate_sqls` ts on ts.`query_id` = te.`query_id` \
-                where te.catalog in ("timeout") and te.sql_date="{_date}"'
+                where te.catalog in ("translate_error") and te.sql_date="{_date}"'
         df = utils.get_tidb_data(conn, sql)
     total_count = len(df)
     success_count = 0

@@ -66,9 +66,11 @@ def get_table_schema_kudu(db, table, cursor, df_columns):
             value = df_columns.at[0, name]
             name = f'`{name}`'
             for cs in columns:
-                # 这个字段经常长度不够用，做大一点
+                # 这些字段经常长度不够用，做大一点
                 if cs['name'] == '`excel_task_id`':
                     cs['len'] = 1000
+                if cs['name'] == '`remark`':
+                    cs['len'] = 2000
                 elif cs['name'] == name:
                     cs['len'] = int(value)
     return {
