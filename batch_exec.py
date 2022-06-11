@@ -80,7 +80,7 @@ def run(engine, action):
             db_schema = json.loads(schema_text)
             tables_schema.extend(db_schema)
     
-    pool = ThreadPoolExecutor(max_workers=utils.thread_count)
+    pool = ThreadPoolExecutor(max_workers=10)
     for table_schema in tables_schema:
         pool.submit(func, table_schema, len(tables_schema))
     pool.shutdown(wait=True)

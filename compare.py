@@ -80,7 +80,7 @@ def compare_tables_in_one_db(db, total_count):
 def compare_tables(dbs):
     global finish_count
     finish_count = 0
-    pool = ThreadPoolExecutor(max_workers=utils.thread_count)
+    pool = ThreadPoolExecutor(max_workers=10)
     for db in dbs:
         pool.submit(compare_tables_in_one_db, db, len(dbs))
     pool.shutdown(wait=True)
@@ -139,7 +139,7 @@ def compare_one_table_schema(table: TableInfo, total_count):
 def compare_tables_schema():
     global finish_count
     finish_count = 0
-    pool = ThreadPoolExecutor(max_workers=utils.thread_count)
+    pool = ThreadPoolExecutor(max_workers=10)
     for table in tables:
         pool.submit(compare_one_table_schema, table, len(tables))
     pool.shutdown(wait=True)
@@ -205,7 +205,7 @@ def compare_field_max_value(impala_cursor, tidb_conn, table: TableInfo, field, i
 def compare_tables_data():
     global finish_count
     finish_count = 0
-    pool = ThreadPoolExecutor(max_workers=utils.thread_count)
+    pool = ThreadPoolExecutor(max_workers=10)
     for table in tables:
         pool.submit(compare_one_table_data, table, len(tables))
     pool.shutdown(wait=True)

@@ -44,7 +44,6 @@ logging.getLogger('impala').setLevel('ERROR')
 hdfs.client._logger.setLevel('ERROR')
 
 logger = logging.getLogger(__name__)
-thread_count = conf.getint('sys', 'threads', fallback=1)
 
 # 线程方法如果发生异常，必须在线程内捕获并记录，主线程得不到通知
 def thread_method(fn):

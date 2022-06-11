@@ -49,7 +49,7 @@ def main():
             files.append(file)
     files.sort()
     # files = ['global_mtlp.json']
-    pool = ThreadPoolExecutor(max_workers=utils.thread_count)
+    pool = ThreadPoolExecutor(max_workers=15)
     for file in files:
         db = file.replace('.json', '')
         with open(f'schemas/{file}', 'r', encoding='utf-8') as f:
