@@ -138,6 +138,12 @@ def get_table_schema(db, table, cursor):
     ts['record_count'] = int(df.at[0, 'cnt'])
     return ts
 
+def filter_table(db, table):
+    if db == 'dp_stat':
+        if table.endswith('_history') or table.startswith('impala_query_log'):
+            return False
+    return True
+
 @utils.thread_method
 def get_db_schema(db, total_count):
     if not hasattr(thread_context, 'cursor'):
@@ -147,6 +153,9 @@ def get_db_schema(db, total_count):
     # tables = ['project_entry_work']
     table_schemas = []
     for table in tables:
+        if not filter_table(db, table):
+            logger.info(f'skip {db}.{table}')
+            continue
         ts = get_table_schema(db, table, thread_context.cursor)
         table_schemas.append(ts)
     text = json.dumps(table_schemas, indent=2, ensure_ascii=False)
@@ -163,7 +172,7 @@ def get_db_schema(db, total_count):
 @utils.timeit
 def main():
     dbs = utils.get_impala_dbs()
-    # dbs = ['global_mtlp']
+    dbs = ['dp_stat']
     pool = ThreadPoolExecutor(max_workers=utils.thread_count)
     for db in dbs:
         pool.submit(get_db_schema, db, len(dbs))
