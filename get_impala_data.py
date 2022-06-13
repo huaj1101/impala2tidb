@@ -160,6 +160,14 @@ def do_clean_text_dbs():
     cursor.close()
     clean_hdfs_trash()
 
+def get_table_csv_size(table):
+    size = 0
+    for file in os.listdir('data_split'):
+        if file.startswith(f'{table}.') and file.endswith('.csv'):
+            file_size = os.path.getsize(f'data_split/{file}')
+            size += file_size
+    return size
+
 def scp_files():
     while True:
         if finished_tables.qsize() == 0:
@@ -170,7 +178,8 @@ def scp_files():
         table = finished_tables.get()
         cmd = f'scp data_split/{table}.* tidb@10.200.40.8://csv-data1/csv/'
         os.system(cmd)
-        cmd = f'ssh tidb@10.200.40.8 -C "touch /csv-data1/csv/{table}.finish"'
+        csv_size = get_table_csv_size(table)
+        cmd = f'ssh tidb@10.200.40.8 -C "echo {csv_size} > /csv-data1/csv/{table}.finish"'
         os.system(cmd)
 
         global scp_finish_count
