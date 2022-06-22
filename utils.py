@@ -100,8 +100,8 @@ def get_tidb_conn(auto_commit=True, tiflash_only=False) -> sqlalchemy.engine.Con
         pwd = conf.get('tidb', 'pwd')
         db = conf.get('tidb', 'db')
         con_str = f'mysql+mysqldb://{user}:{pwd}@{host}:{port}/{db}?charset=utf8'
-        _tidb_engine = sqlalchemy.create_engine(con_str)
-        _readonly_tidb_engine = sqlalchemy.create_engine(con_str, pool_reset_on_return=None)
+        _tidb_engine = sqlalchemy.create_engine(con_str, pool_size=20, max_overflow=20)
+        _readonly_tidb_engine = sqlalchemy.create_engine(con_str, pool_reset_on_return=None, pool_size=20, max_overflow=20)
     if auto_commit:
         conn = _tidb_engine.connect()
     else:
@@ -161,11 +161,18 @@ def get_impala_cursor_prod():
     return cursor
 
 def filter_biz_db(db):
-    special_dbs = ['public_data', 'ai', 'dp_stat']
+    # special_dbs = ['public_data', 'ai', 'dp_stat']
+    special_dbs = ['public_data', 'dp_stat']
     ignore_dbs = []
     # ignore_dbs = ['global_dw_1', 'global_dw_2', 'global_dwb']
     return not db.startswith('___') and db not in ignore_dbs and not db.endswith('_text') and \
         (db.startswith('global_') or db.startswith('asset_') or db.endswith('_custom') or db in special_dbs)
+
+def filter_table(db, table):
+    if db == 'dp_stat':
+        if table.endswith('_history') or table.startswith('impala_query_log'):
+            return False
+    return True
 
 def get_impala_dbs(filter=filter_biz_db):
     cursor = get_impala_cursor()
@@ -195,14 +202,18 @@ def get_tables_in_impala_db(db, cursor):
     df = as_pandas(cursor)
     tables = []
     for i in range(len(df)):
-        tables.append(df.at[i, 'name'])
+        table = df.at[i, 'name']
+        if filter_table(db, table):
+            tables.append(table)
     return tables
 
 def get_tables_in_tidb_db(db, conn):
     df = pd.read_sql_query(f'show tables in {db}', conn)
     tables = []
     for i in range(len(df)):
-        tables.append(df.at[i, f'Tables_in_{db}'])
+        table = df.at[i, f'Tables_in_{db}']
+        if filter_table(db, table):
+            tables.append(table)
     return tables
 
 def exec_impala_sql(cursor, sql, query_options=None):

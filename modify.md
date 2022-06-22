@@ -1104,6 +1104,19 @@ INSERT INTO gdcd_custom.gdcd_year_node_detail (org_id,id,year_node_id,node_id,na
 /*& $replace:tenant */
 ```
 
+SQL3:
+
+period_plan_detail_id 是非空字段
+
+```
+INSERT INTO cr9g_custom.cr9g_project_period_progress_detail (org_id,id,period_progress_id,period_plan_detail_id,actual_start_date,actual_end_date,actual_progress,actual_effect_target,complete_quantity,surplus_quantity,is_complete,remark,created_at,updated_at,creator,reviser,version) VALUES (1259690140572136,1294622101566464,1294109876786688,1294099193641483,'2022-01-01 00:00:00.0',null,null,null,null,null,null,null,'2022-06-15 09:15:39.614','2022-06-15 09:15:39.614',1259721658088936,1259721658088936,1294622101575168)
+/*& tenant:cr9g */
+/*& $replace:tenant */ ,(1259690140572136,1294622101740520,1294109876786688,1294099193641487,'2022-01-01 00:00:00.0',null,null,null,null,null,null,null,'2022-06-15 09:15:39.635','2022-06-15 09:15:39.635',1259721658088936,1259721658088936,1294622101756881) ,(1259690140572136,1294622102526976,1294109876786688,null,null,null,null,null,null,null,null,null,'2022-06-15 09:15:39.731','2022-06-15 09:15:39.731',1259721658088936,1259721658088936,1294622102534632) ,
+......
+```
+
+
+
 ## 错误的日期格式
 
 impala里，无论什么样的字符串，都能插入到日期字段，只不过不合规范的会插入为null

@@ -9,7 +9,7 @@ scp_csv_folder = '/csv-data1/csv'
 restore_csv_folder = '/csv-data1/csv-batch'
 size_th = 50 * 1024 * 1024 * 1024
 count_th = 500
-time_th = 1 * 60
+time_th = 5 * 60
 
 tables_loaded = set()
 tables_to_restore = []
@@ -58,7 +58,11 @@ def run_batch(batch):
     logger.info(f'{total_restore_count} tables restored')
 
 def restore():
+    global last_restore_batch
     while True:
+        # 从扫描到第一个文件开始计时
+        if len(tables_loaded) == 0:
+            last_restore_batch = time.time()
         for file in os.listdir(scp_csv_folder):
             if file.endswith('.finish'):
                 table = file.replace('.finish', '')
@@ -69,6 +73,7 @@ def restore():
                 size = int(s_size)
                 tables_to_restore.append((table, size))
                 tables_loaded.add(table)
+                logger.info(f'{table} scp ready')
         tables_to_restore.sort(key=lambda item: item[1], reverse=True)
         batch = calc_batch()
         if batch:

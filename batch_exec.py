@@ -34,8 +34,10 @@ def truncate_table_tidb(table_schema, total_count):
 @utils.thread_method
 def analyze_table_tidb(table_schema, total_count):
     sql = f'ANALYZE TABLE {table_schema["table"]}'
+    logger.info(sql + ' start')
     with utils.get_tidb_conn() as conn:
         conn.execute(sql)
+    logger.info(sql + ' done')
     
     global finish_count
     lock.acquire()
@@ -80,8 +82,13 @@ def run(engine, action):
             db_schema = json.loads(schema_text)
             tables_schema.extend(db_schema)
     
-    pool = ThreadPoolExecutor(max_workers=10)
+    pool = ThreadPoolExecutor(max_workers=3)
+    i = 0
+    global finish_count
+    finish_count = 1740
     for table_schema in tables_schema:
+        i += 1
+        if i <= 1740: continue
         pool.submit(func, table_schema, len(tables_schema))
     pool.shutdown(wait=True)
 

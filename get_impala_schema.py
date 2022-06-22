@@ -138,11 +138,6 @@ def get_table_schema(db, table, cursor):
     ts['record_count'] = int(df.at[0, 'cnt'])
     return ts
 
-def filter_table(db, table):
-    if db == 'dp_stat':
-        if table.endswith('_history') or table.startswith('impala_query_log'):
-            return False
-    return True
 
 @utils.thread_method
 def get_db_schema(db, total_count):
@@ -153,7 +148,7 @@ def get_db_schema(db, total_count):
     # tables = ['project_entry_work']
     table_schemas = []
     for table in tables:
-        if not filter_table(db, table):
+        if not utils.filter_table(db, table):
             logger.info(f'skip {db}.{table}')
             continue
         ts = get_table_schema(db, table, thread_context.cursor)

@@ -188,18 +188,45 @@ def scp_files():
         logger.info(f'{scp_finish_count} tables scp finish, {finished_tables.qsize()} waiting')
         lock.release()
 
+def get_all_table_schemas():
+    table_schemas = []
+    files = []
+    for file in os.listdir('schemas/'):
+        if file.endswith('.json'):
+            files.append(file)
+    # files = ['global_ipm.json']
+    files.sort()
+    for file in files:
+        with open(f'schemas/{file}', 'r', encoding='utf-8') as f:
+            schema_text = f.read()
+            db_schema = json.loads(schema_text)
+            table_schemas.extend(db_schema)
+    return table_schemas
+
+def get_mismatch_table_schemas():
+    with open('mismatch_tables.txt', 'r') as f:
+        lines = f.readlines()
+    lines.sort()
+    db_schemas = {}
+    table_schemas = []
+    for line in lines:
+        db, table = line.strip('\n').split('.')
+        if db not in db_schemas:
+            file = f'schemas/{db}.json'
+            with open(f'{file}', 'r', encoding='utf-8') as f:
+                schema_text = f.read()
+            db_schemas[db] = json.loads(schema_text)
+        for table_schema in db_schemas[db]:
+            if table_schema['table'] == f'`{db}`.`{table}`':
+                table_schemas.append(table_schema)
+                break
+    return table_schemas
+
 @utils.timeit
 def main(action):
     if action == 'clean':
         do_clean_text_dbs()
         return
-
-    files = []
-    for file in os.listdir('schemas/'):
-        if file.endswith('.json'):
-            files.append(file)
-    files.sort()
-    # files = ['global_ipm.json']
 
     if action == 'prepare':
         func = prepare_table
@@ -211,15 +238,8 @@ def main(action):
         scp_pool = ThreadPoolExecutor(max_workers=3)
         for i in range(3):
             scp_pool.submit(scp_files)
-
+    table_schemas = get_mismatch_table_schemas() if action == 'mismatch' else get_all_table_schemas()
     get_data_pool = ThreadPoolExecutor(max_workers=get_data_threads)
-    table_schemas = []
-    for file in files:
-        with open(f'schemas/{file}', 'r', encoding='utf-8') as f:
-            schema_text = f.read()
-            db_schema = json.loads(schema_text)
-            table_schemas.extend(db_schema)
-
     for table_schema in table_schemas:
         get_data_pool.submit(func, table_schema, len(table_schemas))
     get_data_pool.shutdown(wait=True)
@@ -230,9 +250,9 @@ def main(action):
         scp_pool.shutdown(wait=True)
 
 if __name__ == '__main__':
-    if len(sys.argv) == 2 and sys.argv[1] in ('clean', 'prepare', 'run'):
+    if len(sys.argv) == 2 and sys.argv[1] in ('clean', 'prepare', 'run', 'mismatch'):
         action = sys.argv[1]
     else:
-        logger.error('param shoud be: clean / prepare / run')
+        logger.error('param shoud be: clean / prepare / run / mismatch')
         sys.exit(1)
     main(action)

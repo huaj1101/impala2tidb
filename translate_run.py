@@ -69,16 +69,28 @@ def get_new_tasks(second_time, batch_size=1000) -> List[Task]:
         exists_batch_ids = ','.join([f'"{query_id}"' for query_id in _exsits_batch])
         if not exists_batch_ids:
             exists_batch_ids = '""'
+        # sql = f'select query_id, hash_id, sql_type, order_id, db, tidb_sql2 as tidb_sql, tiflash_only from test.translate_sqls \
+        #         where sql_date = "{_date}" and execute_result2 is null and tidb_sql2 != ""  \
+	    #         and query_id not in \
+        #         (select query_id from test.`translate_err` where catalog in ("timeout", "delay") or catalog like "modify_%") \
+        #         and query_id not in ({exists_batch_ids}) \
+        #         limit {batch_size}'
         sql = f'select query_id, hash_id, sql_type, order_id, db, tidb_sql2 as tidb_sql, tiflash_only from test.translate_sqls \
-                where sql_date = "{_date}" and execute_result2 is null and tidb_sql2 != "" and tidb_sql2 != tidb_sql \
-	            and query_id not in \
-                (select query_id from test.`translate_err` where catalog in ("timeout", "delay") or catalog like "modify_%") \
-                and query_id not in ({exists_batch_ids}) \
-                limit {batch_size}'
+                where sql_date = "{_date}" and execute_result2 is null and order_id > {_start_id} \
+                    and tidb_sql2 != "" order by order_id limit {batch_size}'
     else:
-        sql = f'select query_id, hash_id, sql_type, order_id, db, tidb_sql, tiflash_only from test.translate_sqls \
-                where sql_date = "{_date}" and execute_result is null and order_id > {_start_id} \
-                    and tidb_sql != "" order by order_id limit {batch_size}'
+        sql = f'select query_id, hash_id, sql_type, order_id, db, tidb_sql, tiflash_only  \
+                from test.`translate_sqls` \
+                where query_id in ( \
+                    select query_id from test.`translate_sqls` \
+                    where sql_date = "{_date}" and execute_result is null and order_id > {_start_id}  \
+                    order by order_id limit {2 * batch_size} \
+                ) and tidb_sql != ""  \
+                order by order_id \
+                limit {batch_size}'
+        # sql = f'select query_id, hash_id, sql_type, order_id, db, tidb_sql, tiflash_only from test.translate_sqls \
+        #         where sql_date = "{_date}" and execute_result is null and order_id > {_start_id} \
+        #             and tidb_sql != "" order by order_id limit {batch_size}'
 
     conn = utils.get_tidb_conn()
     try:
@@ -113,7 +125,9 @@ def fill_task_action(share_dict, lock, task_queue: Queue):
     while True:
         if task_queue.qsize() < _task_count_th:
             try:
+                # logger.info('get new task start')
                 tasks = get_new_tasks(second_time)
+                # logger.info('get new task done')
             except Exception as e:
                 logger.error(f'get tasks error: {e}')
                 time.sleep(1)
@@ -122,8 +136,7 @@ def fill_task_action(share_dict, lock, task_queue: Queue):
                 task_queue.put(task)
             if len(tasks) > 0:
                 _start_id = tasks[-1].order_id
-                if second_time:
-                    logger.info(f'fill {len(tasks)} tasks, queue size: {task_queue.qsize()}')
+                # logger.info(f'fill {len(tasks)} tasks, queue size: {task_queue.qsize()}')
             else:
                 time.sleep(1)
         else:
@@ -149,7 +162,10 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
                 if task.db != 'default':
                     utils.exec_tidb_sql(conn, f'use {task.db}')
                 start = time.time()
-                utils.exec_tidb_sql(conn, task.sql, 20)
+
+                task_sql = task.sql#.replace('mctech_encrypt', 'upper').replace('mctech_decrypt', 'upper').replace('mctech_sequence()', 'nextval(test.seq)')
+
+                utils.exec_tidb_sql(conn, task_sql, 20)
                 duration = time.time() - start
             except TimeoutError as e:
                 err_msg = str(e)
@@ -169,7 +185,9 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
 
 def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Queue):
     second_time = share_dict['second_time']
-    col = 'execute_result2' if second_time else 'execute_result'
+    col1 = 'tidb_duration2' if second_time else 'tidb_duration'
+    col2 = 'execute_result2' if second_time else 'execute_result'
+    err_table = 'translate_err2' if second_time else 'translate_err'
     while True:
         conn = utils.get_tidb_conn()
         start = time.time()
@@ -179,8 +197,8 @@ def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Qu
                 task: Task = finish_task_queue.get(block=True)
                 wait_so_long = time.time() - start > 10
                 sql = f'update test.translate_sqls set \
-                        tidb_duration = {task.exec_duration}, \
-                        {col} = {task.exec_result}, \
+                        {col1} = {task.exec_duration}, \
+                        {col2} = {task.exec_result}, \
                         execute_time = "{task.exec_time}" \
                         where query_id = "{task.query_id}"'
                 utils.exec_tidb_sql(conn, sql)
@@ -189,7 +207,7 @@ def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Qu
                     if not task.catalog:
                         task.catalog = translate_utils.get_error_catalog(task.sql, task.err_msg)
                     if task.catalog not in ('ignore_duplicate_insert', 'ignore_etl'):
-                        sql = f'insert into test.translate_err (query_id, sql_date, hash_id, err_msg, catalog) \
+                        sql = f'insert into test.{err_table} (query_id, sql_date, hash_id, err_msg, catalog) \
                                 values ("{task.query_id}", "{_date}", "{task.hash_id}", "{escape_string(task.err_msg)}", "{task.catalog}") \
                                 on duplicate key update err_msg=values(err_msg), catalog=values(catalog)'
                         utils.exec_tidb_sql(conn, sql)

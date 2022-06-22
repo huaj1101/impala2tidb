@@ -17,7 +17,9 @@ thread_context = threading.local()
 sql_times = {}
 lock = threading.Lock()
 finish_count = 0
-mismatch = False
+tables_mismatch_count = 0
+miss_dbs = []
+miss_tables = []
 
 class TableInfo:
     def __init__(self, db, table) -> None:
@@ -36,15 +38,13 @@ tables: List[TableInfo] = []
 def compare_dbs(dbs_impala, dbs_tidb):
     logger.info(f'  impala dbs: {len(dbs_impala)}')
     logger.info(f'  tidb dbs: {len(dbs_tidb)}')
-    global mismatch
     for db_impala in dbs_impala:
         if db_impala not in dbs_tidb:
             logger.error(f'  {db_impala} not found in tidb')
-            mismatch = True
+            miss_dbs.append(db_impala)
     for db_tidb in dbs_tidb:
         if db_tidb not in dbs_impala:
             logger.error(f'  {db_tidb} not found in impala')
-            mismatch = True
 
 @utils.thread_method
 def compare_tables_in_one_db(db, total_count):
@@ -59,20 +59,24 @@ def compare_tables_in_one_db(db, total_count):
     # print(len(tables_tidb))
     tables_impala_set = set(tables_impala)
     tables_tidb_set = set(tables_tidb)
-    global mismatch
+    mismatch_count = 0
     for table_impala in tables_impala:
         if table_impala not in tables_tidb_set:
             logger.error(f'  {db}.{table_impala} not found in tidb')
-            mismatch = True
+            miss_tables.append(f'{db}.{table_impala}')
+            mismatch_count += 1
     for table_tidb in tables_tidb:
         if table_tidb not in tables_impala_set:
             logger.error(f'  {db}.{table_tidb} not found in impala')
-            mismatch = True
+            mismatch_count += 1
+
     global finish_count
+    global tables_mismatch_count
     lock.acquire()
-    if not mismatch:
-        tables.extend([TableInfo(db, table) for table in tables_impala])
+    common_tables = list(set(tables_impala) & set(tables_tidb))
+    tables.extend([TableInfo(db, table) for table in common_tables])
     finish_count += 1
+    tables_mismatch_count += mismatch_count
     logger.info('  %d / %d compare_tables in %s finish in %.1f seconds--' % (finish_count, total_count, db, time.time() - start))
     lock.release()
 
@@ -84,6 +88,8 @@ def compare_tables(dbs):
     for db in dbs:
         pool.submit(compare_tables_in_one_db, db, len(dbs))
     pool.shutdown(wait=True)
+    if tables_mismatch_count > 0:
+        logger.error(f'  tables mismatch count: {tables_mismatch_count}')
 
 @utils.thread_method
 def compare_one_table_schema(table: TableInfo, total_count):
@@ -102,10 +108,9 @@ def compare_one_table_schema(table: TableInfo, total_count):
 
     df_tidb = pd.read_sql_query(sql, thread_context.tidb_conn)
     col_cnt_tidb = len(df_tidb)
-    global mismatch
     if col_cnt_impala != col_cnt_tidb:
         logger.error(f'  {table.full_name} col count mismatch, impala {col_cnt_impala} tidb {col_cnt_tidb}')
-        mismatch = True
+        table.schema_match = False
 
     cols_impala = set()
     for i in range(len(df_impala)):
@@ -117,15 +122,13 @@ def compare_one_table_schema(table: TableInfo, total_count):
     for col_impala in cols_impala:
         if col_impala not in cols_tidb:
             logger.error(f'  {table.full_name}.{col_impala} not found in impala')
-            mismatch = True
+            table.schema_match = False
     for col_tidb in cols_tidb:
         if col_tidb not in cols_tidb:
             logger.error(f'  {table.full_name}.{col_tidb} not found in tidb')
-            mismatch = True
+            table.schema_match = False
 
-    if mismatch:
-        table.schema_match = False
-    else:
+    if table.schema_match:
         table.cols = cols_impala
 
     global finish_count
@@ -148,8 +151,6 @@ def compare_tables_schema():
         if not table.schema_match:
             error_count += 1
     if error_count > 0:
-        global mismatch
-        mismatch = True
         logger.error(f'  table schema mismatch count: {error_count}')
 
 @utils.thread_method
@@ -214,36 +215,47 @@ def compare_tables_data():
         if not table.data_match:
             error_count += 1
     if error_count > 0:
-        global mismatch
-        mismatch = True
         logger.error(f'  table data mismatch count: {error_count}')
+
+def save_mismatch_tables():
+    mismatch_tables = []
+    cursor = utils.get_impala_cursor()
+    for db in miss_dbs:
+        tables_in_db = utils.get_tables_in_impala_db(db, cursor)
+        for table in tables_in_db:
+            mismatch_tables.append(f'{db}.{table}')
+    cursor.close()
+    for table in miss_tables:
+        mismatch_tables.append(table)
+    for table in tables:
+        if not table.schema_match or not table.data_match:
+            mismatch_tables.append(table.full_name)
+    mismatch_tables = list(set(mismatch_tables))
+    mismatch_tables.sort()
+    with open('mismatch_tables.txt', 'w', encoding='utf-8') as f:
+        for table in mismatch_tables:
+            f.writelines(table + '\n')
 
 @utils.timeit
 def main():
     dbs_impala = utils.get_impala_dbs()
     dbs_tidb = utils.get_tidb_dbs()
-    # 比较数据是否匹配
+
+    # 比较数据库是否匹配
     compare_dbs(dbs_impala, dbs_tidb)
-    if mismatch: 
-        logger.error('dbs mismatch')
-        return
+
     # 比较表是否匹配
-    # dbs_impala = ['global_platform']
-    compare_tables(dbs_impala)
-    if mismatch: 
-        logger.error('tables mismatch')
-        return
+    common_dbs = list(set(dbs_impala) & set(dbs_tidb))
+    # common_dbs = ['global_platform']
+    compare_tables(common_dbs)
 
     # 比较每张表的schema
     compare_tables_schema()
-    if mismatch: 
-        logger.error('tables schema mismatch')
-        return
-    # 比较每张表的data
-    compare_tables_data()
-    if mismatch: 
-        logger.error('tables data mismatch')
-        return
+
+    # # 比较每张表的data
+    # compare_tables_data()
+
+    save_mismatch_tables()
 
 if __name__ == '__main__':
     main()

@@ -84,7 +84,7 @@ def run():
     with utils.get_tidb_conn() as conn:
         sql = f'select te.query_id, ts.sql_type, te.catalog, ts.tiflash_only from test.translate_err te \
                 join test.`translate_sqls` ts on ts.`query_id` = te.`query_id` \
-                where te.catalog in ("translate_error") and te.sql_date="{_date}"'
+                where te.catalog in ("not_processed") and te.sql_date="{_date}"'
         df = utils.get_tidb_data(conn, sql)
     total_count = len(df)
     success_count = 0
@@ -100,6 +100,13 @@ def run():
             logger.info(f'{i+1} / {total_count} {query_id} still fail')
     logger.info(f'{success_count} / {total_count} success')
 
+def run_endless():
+    while True:
+        run()
+        time.sleep(5)
 
 if __name__ == '__main__':
-    run()
+    if len(sys.argv) == 2 and sys.argv[1] == 'endless':
+        run_endless()
+    else:
+        run()

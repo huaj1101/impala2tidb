@@ -6,3 +6,4 @@ data
 big_sqls
 error_data.txt
 correct_prod_data.sql
+mismatch_tables.txt
