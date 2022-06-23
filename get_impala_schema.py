@@ -35,6 +35,14 @@ def get_pk_unique_subset(db, table, pk, cursor):
         return new_keys
     return pk
 
+def get_col_default_len(col):
+    # 这些字段经常长度不够用，做大一点
+    if col == '`excel_task_id`':
+        return 1000
+    if col == '`remark`':
+        return 2000
+    return 0
+
 def get_table_schema_kudu(db, table, cursor, df_columns):
     primary_keys = []
     columns = []
@@ -42,7 +50,8 @@ def get_table_schema_kudu(db, table, cursor, df_columns):
     for i in range(len(df_columns)):
         name = f'`{df_columns.at[i, "name"]}`'
         type = df_columns.at[i, 'type']
-        if type == 'string':
+        col_len = get_col_default_len(name)
+        if type == 'string' and col_len == 0:
             str_columns.append(name)
         nullable = df_columns.at[i, 'nullable']
         default_value = df_columns.at[i, 'default_value']
@@ -52,7 +61,7 @@ def get_table_schema_kudu(db, table, cursor, df_columns):
         column_schema = {
             'name': name,
             'type': type,
-            'len': 0,
+            'len': col_len,
             'nullable': nullable,
             'default_value': default_value
         }
@@ -66,12 +75,7 @@ def get_table_schema_kudu(db, table, cursor, df_columns):
             value = df_columns.at[0, name]
             name = f'`{name}`'
             for cs in columns:
-                # 这些字段经常长度不够用，做大一点
-                if cs['name'] == '`excel_task_id`':
-                    cs['len'] = 1000
-                if cs['name'] == '`remark`':
-                    cs['len'] = 2000
-                elif cs['name'] == name:
+                if cs['name'] == name:
                     cs['len'] = int(value)
     return {
         'table': f'`{db}`.`{table}`', 
@@ -167,7 +171,7 @@ def get_db_schema(db, total_count):
 @utils.timeit
 def main():
     dbs = utils.get_impala_dbs()
-    # dbs = ['dp_stat']
+    dbs = ['global_ipm']
     pool = ThreadPoolExecutor(max_workers=15)
     for db in dbs:
         pool.submit(get_db_schema, db, len(dbs))

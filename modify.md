@@ -477,6 +477,32 @@ WHERE pbqd.is_removed = false
 ORDER BY pbqd.level, pbqd.order_no
 ```
 
+SQL2:
+
+这段SQL写的逻辑混乱，导致执行计划乱七八糟
+
+这个子句里的where条件毫无必要，而且有个is_removed条件，在CTE：qLabourAllot中并无此列
+
+and item_bar_code in (select item_bar_code from qLabourAllot  where org_id= 749816950517760 and order_id = 1275015682283008 and is_removed=false    and material_name like '%%'  and material_model like '%%'  )
+
+```mysql
+/* from:'node-mq-mquantity-service', addr:'10.180.137.85' */
+with qLabourAllot as (
+               select id , order_id , org_id , material_id,ori_material_id, material_code, material_name, material_model,material_unit,quantity,
+                      class_id,ori_class_id,class_full_id, ori_org_id , item_bar_code,sort_code,auxiliary_unit from q_labour_allot_item
+                      where org_id= 749816950517760 and order_id = 1275015682283008 and is_removed=false    and material_name like '%%'  and material_model like '%%'  )
+              SELECT a.*,b.manufacturer,b.batch_no, b.test_report_no, b.storage_place,b.skill_card_no,b.remark
+              FROM qLabourAllot a
+               left join
+               (select manufacturer,batch_no, test_report_no, storage_place,skill_card_no, auxiliary_unit, item_bar_code,remark
+                from q_receive_more_material WHERE  org_id= 749816950517760 and is_removed=false and service_type>0 AND order_type=4 
+                and item_bar_code in (select item_bar_code from qLabourAllot  where org_id= 749816950517760 and order_id = 1275015682283008 and is_removed=false    and material_name like '%%'  and material_model like '%%'  ))b
+                on a.item_bar_code = b.item_bar_code
+                order by a.sort_code
+```
+
+
+
 # SQL语法错误
 
 impala语法检查相当宽松，有一些SQL写的不太妥当，在impala里能执行（但可能是隐藏的bug），在tidb里会报错
@@ -485,7 +511,7 @@ impala语法检查相当宽松，有一些SQL写的不太妥当，在impala里�
 
 去掉offset
 
-```
+```mysql
 /* from:'node-mq2-rds-service', addr:'10.180.137.1' */
 SELECT `id`, `org_id`, `order_id`, `labour_id`, `labour_name`, `gh_id`, `gh_name`, `gh_full_id`, `gh_full_name`, `ori_gh_id`, `material_id`, `material_code`, `material_name`, `material_model`, `material_unit`, `auxiliary_unit`, `class_id`, `class_full_id`, `inventory_quantity`, `net_quantity`, `has_sale`, `residue_quantity`, `last_check_quantity`, `last_labour_rest_quantity`, `labour_consume_quantity`, `diff_quantity`, `receive_quantity`, `delivery_quantity`, `is_check`, `price`, `item_remark`, `ori_org_id`, `ori_material_id`, `ori_labour_id`, `ori_common_id`, `ori_class_id`, `ori_item_id`, `ori_order_id`, `sort_code`, `is_removed`, `creator_id`, `creator_name`, `created_at`, `modifier_id`, `modifier_name`, `updated_at`, `version`, `storage_place`, `adjustment_reasons` 
 FROM `q_check_store_item` AS `qCheckStoreItem` 
@@ -1113,6 +1139,16 @@ INSERT INTO cr9g_custom.cr9g_project_period_progress_detail (org_id,id,period_pr
 /*& tenant:cr9g */
 /*& $replace:tenant */ ,(1259690140572136,1294622101740520,1294109876786688,1294099193641487,'2022-01-01 00:00:00.0',null,null,null,null,null,null,null,'2022-06-15 09:15:39.635','2022-06-15 09:15:39.635',1259721658088936,1259721658088936,1294622101756881) ,(1259690140572136,1294622102526976,1294109876786688,null,null,null,null,null,null,null,null,null,'2022-06-15 09:15:39.731','2022-06-15 09:15:39.731',1259721658088936,1259721658088936,1294622102534632) ,
 ......
+```
+
+SQL4:
+
+is_removed 是非空字段
+
+```
+/* from:'node-mq2-rds-service', addr:'10.180.184.138' */
+INSERT INTO `q_receive_more_material` (`id`,`org_id`,`order_id`,`service_type`,`order_type`,`is_red`,`item_data_id`,`submit_date`,`material_id`,`material_code`,`material_name`,`material_model`,`material_unit`,`class_id`,`class_full_id`,`receive_price`,`auxiliary_unit`,`net_quantity`,`rough_quantity`,`conversion_rate`,`deduct_rate`,`deduct_quantity`,`ori_net_quantity`,`auxiliary_net_quantity`,`main_net_quantity`,`waybill_weight`,`item_bar_code`,`manufacturer`,`batch_no`,`test_report_no`,`storage_place`,`stockbin_id`,`stockbin_full_name`,`ori_stockbin_id`,`skill_card_no`,`quality_certificate`,`remark`,`sort_code`,`is_accounted`,`accountor`,`account_date`,`check_state`,`account_order_id`,`acceptance_record`,`ori_material_id`,`ori_class_id`,`ori_common_id`,`ori_item_id`,`ori_plan_id`,`ori_order_id`,`ori_org_id`,`is_removed`,`tax_rate`,`tax_free_price`,`tax_free_sum`,`tax_included_price`,`tax_included_sum`,`tax_amount`,`freight`,`is_void`,`is_accounted_eg`,`creator_id`,`type_mark`,`creator_name`,`created_at`,`modifier_id`,`modifier_name`,`updated_at`,`version`) VALUES (1294637429944832,1165089319505920,1294652334061568,10,4,false,NULL,'2022-06-15',651631265404135,'00090','外贴式橡胶止水带',' E2-3型350mm*10mm','米',NULL,NULL,0,NULL,1250,1250,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'P202206151017105wfx','','','','',0,NULL,NULL,'','',NULL,1,false,NULL,NULL,0,NULL,NULL,NULL,NULL,NULL,NULL,0,NULL,'',false,NULL,0,0,0,0,0,0,false,false,1174987211796480,'批次维度','','2022-06-15 09:46:50.756000',1174987211796480,'','2022-06-15 10:17:10.508000',1294637429944832),(1294652337370625,1165089319505920,1294652334061568,10,4,false,NULL,'2022-06-15',651631265404179,'00134','中埋式钢边橡胶止水带','350*10mm','米',NULL,NULL,NULL,NULL,550,550,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'P20220615101710aTvt','','','','',NULL,NULL,NULL,'','',NULL,2,false,NULL,NULL,0,NULL,NULL,NULL,NULL,NULL,NULL,0,NULL,'',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,false,1174987211796480,'批次维度','','2022-06-15 10:17:10.511000',1174987211796480,'','2022-06-15 10:17:10.509000',1294652337370625);
+
 ```
 
 

@@ -51,7 +51,8 @@ def fill_task_action(share_dict, lock, task_queue: Queue):
                 time.sleep(1)
                 continue
             for task in tasks:
-                task_queue.put(task)
+                if task['db'] != 'ghatg_gsbim':
+                    task_queue.put(task)
             # if len(tasks) > 0:
             #     logger.info(f'fill {len(tasks)} tasks, queue size: {task_queue.qsize()}')
         else:
