@@ -228,19 +228,23 @@ select *, 0 app_origin from (
         limit 20
 ```
 
-## with子句
+## with语句块
 
 with子句，在impala里是语法糖，运行时会嵌入到主SQL中
 
 但是在tidb里，with是标准的CTE实现，会把with先行运算，结果取到内存中，再进行后续操作
 
-如果with子句的结果集不大，那没多少差异，但是有的结果集非常大，百万千万条，在tidb里效率就很低了
+如果with子句的结果集不大，那没多少差异，可能还会更快
+
+但是有的结果集非常大，百万千万条，在tidb里效率就很低了
 
 此时为了兼容考虑，需要取消with子句，直接嵌入到主SQL中
 
 以下是搜到的需要改的SQL
 
 SQL1：
+
+把orgs嵌入到dosage语句块，不然会把q_dosage符合条件的结果都取到内存中再与cte去join，几千万条
 
 ```sql
 /* from:'node-ca-concrete-service', addr:'10.180.38.176' */
@@ -278,20 +282,82 @@ with orgs as ( -- pc门户--类别汇总应耗实耗
 
 SQL2：
 
+同SQL1
+
+```mysql
+/* from:'node-ca-concrete-service', addr:'10.180.38.133' */
+with orgs as (select child_org_id from global_platform.org_relation where org_id=969222554611712 and child_type='project'),
+          static_class as ( -- 门户 消耗数量
+             select category_name,category_id,material_id,material_unit 
+                from (select b.id as category_id,b.name category_name,b.material_unit
+                      from g_statistic_category as b 
+                      where b.is_removed=false
+                        and b.dict_type = 'statistic'
+                        and b.custome_code in ('statistic_shuini','statistic_shizi','statistic_shazi','statistic_waijiaji','statistic_fenmeihui')
+                ) c
+             inner join g_statistic_category_material as a on a.statistic_id = c.category_id
+          ),
+          supplementData as(
+             select isnull(b.material_id,0)material_id,
+                cast(isnull(b.fact_amnt/1000,0) as decimal(28,8))quantity 
+             from q_manual_supplement as a
+                inner join q_manual_supplement_item b 
+             on a.id=b.order_id
+                where a.org_id in(select child_org_id from orgs) 
+                  and a.is_productionsystem = true 
+                  and a.is_audit=true 
+                  and dat_tim>= '1900-01-01 00:00:00' and dat_tim<= '2022-06-01 20:21:15'
+                  and a.is_removed=false and b.is_removed=false
+          ),
+          dosageData as (
+            select  material_id,
+            cast(isnull(sum(plan_amn),0)/1000 as decimal(28,8)) plan_amn, 
+            cast(isnull(sum(fact_amnt),0)/1000 as decimal(28,8)) fact_amnt 
+            from q_dosage 
+            join  orgs
+            on q_dosage.org_id=orgs.child_org_id    
+            where  is_removed=false   
+                   and dat_tim>= '1900-01-01 00:00:00' and dat_tim<= '2022-06-01 20:21:15'
+            group by material_id
+          ),
+          dosage as(
+                select 
+                    material_id,
+                    sum(plan_amn)plan_amn,
+                    sum(fact_amnt) fact_amnt
+                from(
+                    select material_id,plan_amn,fact_amnt from dosageData
+                    union all
+                    select material_id,quantity,quantity from supplementData
+                ) as a
+                group by material_id
+          )
+      select category_id as statistic_class_id, isnull(category_name,'暂无类别') as statistic_class_name,
+            cast(isnull(sum(plan_amn),0) as decimal(28,3)) as plan_amn,
+            cast(isnull(sum(fact_amnt),0) as decimal(28,3)) as fact_amnt
+        from static_class
+        left join dosage
+        on  dosage.material_id=static_class.material_id 
+        group by category_id,category_name
+        order by category_id
+```
+
+SQL3：
+
 ```sql
 /* from:'node-mp-common-service', addr:'10.180.38.136' */
 WITH orgs AS(SELECT child_org_id FROM global_platform.org_relation WHERE org_id = 1012251829238272  AND child_type = 'project'),produceTmp AS(SELECT org_id,dat_tim,schedule_id,labour_name,vehicle,car_amnt,trans_mete,material_unit,reciepe_no,bet_lev,material_name,material_model,pro_line,operator,customer,project_name,cons_pos,station,concat(isnull(material_name,''),' | ',isnull(material_model,'')) AS mater_info FROM q_produce WHERE org_id in(SELECT child_org_id FROM orgs) AND is_removed = FALSE   and dat_tim between '2017-01-01 00:00:00'  and '2022-05-18 19:15:01' ),produceData AS(SELECT sum(b.plan_amn)plan_amn,sum(b.fact_amnt)fact_amnt,a.pro_line,a.schedule_id,a.org_id,b.material,concat(isnull(b.material_name,''),' | ',isnull(b.material_model,'')) AS mater_info FROM produceTmp as a LEFT JOIN q_dosage b ON b.org_id = a.org_id AND a.pro_line = b.pro_line AND a.schedule_id = b.schedule_id GROUP BY mater_info,a.pro_line,a.schedule_id,a.org_id,material),supplementTmp AS ( SELECT a.id,cast(a.id as string) as schedule_id,a.org_id,dat_tim,vehicle,CAST(isnull(prod_mete,0) AS decimal(28,3)) car_amnt,isnull(labour_name,'')                      labour_name,CAST(isnull(prod_mete,0) AS decimal(28,3)) trans_mete,pro_line,reciepe_no,bet_lev,'' customer,''project_name,a.auditor  AS                                  operator,cons_pos,a.org_name AS                                  station,a.material_name,a.material_unit,a.material_model,concat(isnull(material_name,''),' | ',isnull(material_model,'')) AS mater_info FROM q_manual_supplement as a  WHERE a.org_id IN (SELECT child_org_id FROM orgs) AND a.is_audit = TRUE AND a.is_removed = FALSE AND a.is_productionsystem = TRUE   and dat_tim between '2017-01-01 00:00:00'  and '2022-05-18 19:15:01'  ),supplementData AS (SELECT a.dat_tim,cast(a.id as string) as schedule_id,a.org_id,a.vehicle,a.car_amnt,a.labour_name,a.trans_mete,a.pro_line,'' material_unit,a.reciepe_no,a.bet_lev,'' material_name,'' material_model,a.operator,'' customer,'' project_name,a.cons_pos,a.station,'' material,concat(isnull(b.material_name,''),isnull(b.material_model,'')) AS mater_info,CAST(isnull(b.fact_amnt,0) AS decimal(28,3))plan_amn,CAST(isnull(b.fact_amnt,0) AS decimal(28,3))fact_amnt FROM supplementTmp AS a INNER JOIN q_manual_supplement_item AS b ON a.id = b.order_id AND a.org_id = b.org_id AND b.is_removed = FALSE),itemsData as(select plan_amn,fact_amnt,mater_info,pro_line,org_id,schedule_id,material from produceData union all select plan_amn,fact_amnt,mater_info,pro_line,org_id,schedule_id,material from supplementData),allData as(select org_id,dat_tim,schedule_id,mater_info,labour_name,vehicle,car_amnt,trans_mete,material_unit,reciepe_no,bet_lev,material_name,material_model,pro_line,operator,customer,project_name,cons_pos,station from produceTmp union all select org_id,dat_tim,schedule_id,mater_info,labour_name,vehicle,car_amnt,trans_mete,material_unit,reciepe_no,bet_lev,material_name,material_model,pro_line,operator,customer,project_name,cons_pos,station from supplementTmp),A as(select  pro_line,org_id,schedule_id,sum(case when material='0' and mater_info='普通硅酸盐水泥 | P · O 42.5 散装'  then plan_amn else 0 end) '0|普通硅酸盐水泥 | P · O 42.5 散装|应耗量',sum(case when material='0' and mater_info='普通硅酸盐水泥 | P · O 42.5 散装'  then fact_amnt else 0 end) '0|普通硅酸盐水泥 | P · O 42.5 散装|实耗量',sum(case when material='0-5' and mater_info='碎石 | 石灰岩 5-10'  then plan_amn else 0 end) '0-5|碎石 | 石灰岩 5-10|应耗量',sum(case when material='0-5' and mater_info='碎石 | 石灰岩 5-10'  then fact_amnt else 0 end) '0-5|碎石 | 石灰岩 5-10|实耗量',sum(case when material='0.5' and mater_info='碎石 | 石灰岩 5-10'  then plan_amn else 0 end) '0.5|碎石 | 石灰岩 5-10|应耗量',sum(case when material='0.5' and mater_info='碎石 | 石灰岩 5-10'  then fact_amnt else 0 end) '0.5|碎石 | 石灰岩 5-10|实耗量',sum(case when material='1-2' and mater_info='碎石 | 石灰岩 10-20'  then plan_amn else 0 end) '1-2|碎石 | 石灰岩 10-20|应耗量',sum(case when material='1-2' and mater_info='碎石 | 石灰岩 10-20'  then fact_amnt else 0 end) '1-2|碎石 | 石灰岩 10-20|实耗量',sum(case when material='1-3' and mater_info='碎石 | 石灰岩 10-20'  then plan_amn else 0 end) '1-3|碎石 | 石灰岩 10-20|应耗量',sum(case when material='1-3' and mater_info='碎石 | 石灰岩 10-20'  then fact_amnt else 0 end) '1-3|碎石 | 石灰岩 10-20|实耗量',sum(case when material='2' and mater_info='普通硅酸盐水泥 | P · O 42.5 散装'  then plan_amn else 0 end) '2|普通硅酸盐水泥 | P · O 42.5 散装|应耗量',sum(case when material='2' and mater_info='普通硅酸盐水泥 | P · O 42.5 散装'  then fact_amnt else 0 end) '2|普通硅酸盐水泥 | P · O 42.5 散装|实耗量',sum(case when material='CFB灰渣' and mater_info=' | '  then plan_amn else 0 end) 'CFB灰渣| | |应耗量',sum(case when material='CFB灰渣' and mater_info=' | '  then fact_amnt else 0 end) 'CFB灰渣| | |实耗量',sum(case when material='中粗机制砂' and mater_info='水泥混凝土用机制砂 | Ⅱ类'  then plan_amn else 0 end) '中粗机制砂|水泥混凝土用机制砂 | Ⅱ类|应耗量',sum(case when material='中粗机制砂' and mater_info='水泥混凝土用机制砂 | Ⅱ类'  then fact_amnt else 0 end) '中粗机制砂|水泥混凝土用机制砂 | Ⅱ类|实耗量',sum(case when material='中粗机制砂' and mater_info='水泥混凝土用机制砂 | Ⅰ类'  then plan_amn else 0 end) '中粗机制砂|水泥混凝土用机制砂 | Ⅰ类|应耗量',sum(case when material='中粗机制砂' and mater_info='水泥混凝土用机制砂 | Ⅰ类'  then fact_amnt else 0 end) '中粗机制砂|水泥混凝土用机制砂 | Ⅰ类|实耗量',sum(case when material='减水剂' and mater_info='高效减水剂 | '  then plan_amn else 0 end) '减水剂|高效减水剂 | |应耗量',sum(case when material='减水剂' and mater_info='高效减水剂 | '  then fact_amnt else 0 end) '减水剂|高效减水剂 | |实耗量',sum(case when material='减水剂' and mater_info='普通减水剂 | '  then plan_amn else 0 end) '减水剂|普通减水剂 | |应耗量',sum(case when material='减水剂' and mater_info='普通减水剂 | '  then fact_amnt else 0 end) '减水剂|普通减水剂 | |实耗量',sum(case when material='机制砂' and mater_info='水泥混凝土用机制砂 | Ⅱ类'  then plan_amn else 0 end) '机制砂|水泥混凝土用机制砂 | Ⅱ类|应耗量',sum(case when material='机制砂' and mater_info='水泥混凝土用机制砂 | Ⅱ类'  then fact_amnt else 0 end) '机制砂|水泥混凝土用机制砂 | Ⅱ类|实耗量',sum(case when material='机制砂' and mater_info='水泥混凝土用机制砂 | Ⅰ类'  then plan_amn else 0 end) '机制砂|水泥混凝土用机制砂 | Ⅰ类|应耗量',sum(case when material='机制砂' and mater_info='水泥混凝土用机制砂 | Ⅰ类'  then fact_amnt else 0 end) '机制砂|水泥混凝土用机制砂 | Ⅰ类|实耗量',sum(case when material='水' and mater_info=' | '  then plan_amn else 0 end) '水| | |应耗量',sum(case when material='水' and mater_info=' | '  then fact_amnt else 0 end) '水| | |实耗量',sum(case when material='水泥' and mater_info='普通硅酸盐水泥 | P · O 42.5 散装'  then plan_amn else 0 end) '水泥|普通硅酸盐水泥 | P · O 42.5 散装|应耗量',sum(case when material='水泥' and mater_info='普通硅酸盐水泥 | P · O 42.5 散装'  then fact_amnt else 0 end) '水泥|普通硅酸盐水泥 | P · O 42.5 散装|实耗量',sum(case when material='水泥1' and mater_info='高炉磨细矿渣粉 | S95'  then plan_amn else 0 end) '水泥1|高炉磨细矿渣粉 | S95|应耗量',sum(case when material='水泥1' and mater_info='高炉磨细矿渣粉 | S95'  then fact_amnt else 0 end) '水泥1|高炉磨细矿渣粉 | S95|实耗量',sum(case when material='水泥1' and mater_info='普通硅酸盐水泥 | P · O 42.5 散装'  then plan_amn else 0 end) '水泥1|普通硅酸盐水泥 | P · O 42.5 散装|应耗量',sum(case when material='水泥1' and mater_info='普通硅酸盐水泥 | P · O 42.5 散装'  then fact_amnt else 0 end) '水泥1|普通硅酸盐水泥 | P · O 42.5 散装|实耗量',sum(case when material='水泥2' and mater_info='磨细粉煤灰 | Ⅱ级'  then plan_amn else 0 end) '水泥2|磨细粉煤灰 | Ⅱ级|应耗量',sum(case when material='水泥2' and mater_info='磨细粉煤灰 | Ⅱ级'  then fact_amnt else 0 end) '水泥2|磨细粉煤灰 | Ⅱ级|实耗量',sum(case when material='水泥3' and mater_info='普通硅酸盐水泥 | P · O 42.5 散装'  then plan_amn else 0 end) '水泥3|普通硅酸盐水泥 | P · O 42.5 散装|应耗量',sum(case when material='水泥3' and mater_info='普通硅酸盐水泥 | P · O 42.5 散装'  then fact_amnt else 0 end) '水泥3|普通硅酸盐水泥 | P · O 42.5 散装|实耗量',sum(case when material='液剂1' and mater_info='普通减水剂 | '  then plan_amn else 0 end) '液剂1|普通减水剂 | |应耗量',sum(case when material='液剂1' and mater_info='普通减水剂 | '  then fact_amnt else 0 end) '液剂1|普通减水剂 | |实耗量',sum(case when material='炉渣' and mater_info='CFB炉渣 | CFB灰渣'  then plan_amn else 0 end) '炉渣|CFB炉渣 | CFB灰渣|应耗量',sum(case when material='炉渣' and mater_info='CFB炉渣 | CFB灰渣'  then fact_amnt else 0 end) '炉渣|CFB炉渣 | CFB灰渣|实耗量',sum(case when material='矿渣粉' and mater_info='高炉磨细矿渣粉 | S95'  then plan_amn else 0 end) '矿渣粉|高炉磨细矿渣粉 | S95|应耗量',sum(case when material='矿渣粉' and mater_info='高炉磨细矿渣粉 | S95'  then fact_amnt else 0 end) '矿渣粉|高炉磨细矿渣粉 | S95|实耗量',sum(case when material='矿粉' and mater_info='高炉磨细矿渣粉 | S95'  then plan_amn else 0 end) '矿粉|高炉磨细矿渣粉 | S95|应耗量',sum(case when material='矿粉' and mater_info='高炉磨细矿渣粉 | S95'  then fact_amnt else 0 end) '矿粉|高炉磨细矿渣粉 | S95|实耗量',sum(case when material='砂子' and mater_info='水泥混凝土用机制砂 | Ⅰ类'  then plan_amn else 0 end) '砂子|水泥混凝土用机制砂 | Ⅰ类|应耗量',sum(case when material='砂子' and mater_info='水泥混凝土用机制砂 | Ⅰ类'  then fact_amnt else 0 end) '砂子|水泥混凝土用机制砂 | Ⅰ类|实耗量',sum(case when material='碎石（10-20mm）' and mater_info='碎石 | 石灰岩 10-20'  then plan_amn else 0 end) '碎石（10-20mm）|碎石 | 石灰岩 10-20|应耗量',sum(case when material='碎石（10-20mm）' and mater_info='碎石 | 石灰岩 10-20'  then fact_amnt else 0 end) '碎石（10-20mm）|碎石 | 石灰岩 10-20|实耗量',sum(case when material='碎石（5-10m)' and mater_info=' | '  then plan_amn else 0 end) '碎石（5-10m)| | |应耗量',sum(case when material='碎石（5-10m)' and mater_info=' | '  then fact_amnt else 0 end) '碎石（5-10m)| | |实耗量',sum(case when material='碎石（5-10mm)' and mater_info='碎石 | 石灰岩 5-10'  then plan_amn else 0 end) '碎石（5-10mm)|碎石 | 石灰岩 5-10|应耗量',sum(case when material='碎石（5-10mm)' and mater_info='碎石 | 石灰岩 5-10'  then fact_amnt else 0 end) '碎石（5-10mm)|碎石 | 石灰岩 5-10|实耗量',sum(case when material='碎石（5-10mm）' and mater_info='碎石 | 石灰岩 5-10'  then plan_amn else 0 end) '碎石（5-10mm）|碎石 | 石灰岩 5-10|应耗量',sum(case when material='碎石（5-10mm）' and mater_info='碎石 | 石灰岩 5-10'  then fact_amnt else 0 end) '碎石（5-10mm）|碎石 | 石灰岩 5-10|实耗量',sum(case when material='粉煤灰' and mater_info='磨细粉煤灰 | Ⅱ级'  then plan_amn else 0 end) '粉煤灰|磨细粉煤灰 | Ⅱ级|应耗量',sum(case when material='粉煤灰' and mater_info='磨细粉煤灰 | Ⅱ级'  then fact_amnt else 0 end) '粉煤灰|磨细粉煤灰 | Ⅱ级|实耗量',sum(case when material='粉煤灰（备用）' and mater_info='磨细粉煤灰 | Ⅱ级'  then plan_amn else 0 end) '粉煤灰（备用）|磨细粉煤灰 | Ⅱ级|应耗量',sum(case when material='粉煤灰（备用）' and mater_info='磨细粉煤灰 | Ⅱ级'  then fact_amnt else 0 end) '粉煤灰（备用）|磨细粉煤灰 | Ⅱ级|实耗量',sum(case when material='null' and mater_info=' | '  then plan_amn else 0 end) 'null| | |应耗量',sum(case when material='null' and mater_info=' | '  then fact_amnt else 0 end) 'null| | |实耗量',sum(plan_amn) plan_amn,sum(fact_amnt) fact_amnt from itemsData GROUP BY pro_line,org_id,schedule_id)select B.dat_tim,B.labour_name,B.vehicle,B.car_amnt,B.trans_mete,B.material_unit,B.reciepe_no,B.bet_lev,B.material_name,B.material_model,B.operator,B.customer,B.project_name,B.cons_pos,B.station,A.* from A as A left join allData as B on A.pro_line = B.pro_line and A.org_id=B.org_id and A.schedule_id = B.schedule_id  order by B.dat_tim desc limit 1000000 offset 0
     
 ```
 
-SQL3:
+SQL4:
 
 ```sql
 /* from:'node-mp-common-service', addr:'10.180.21.157' */
 select temp_a.material,temp_a.mater_info from ( WITH orgs AS(SELECT child_org_id FROM global_platform.org_relation WHERE org_id = 1012251829238272  AND child_type = 'project'),produceTmp AS(SELECT org_id,dat_tim,schedule_id,labour_name,vehicle,car_amnt,trans_mete,material_unit,reciepe_no,bet_lev,material_name,material_model,pro_line,operator,customer,project_name,cons_pos,station,concat(isnull(material_name,''),' | ',isnull(material_model,'')) AS mater_info FROM q_produce WHERE org_id in(SELECT child_org_id FROM orgs) AND is_removed = FALSE   and dat_tim between '2018-01-01 00:00:00'  and '2022-05-18 19:10:36' ),produceData AS(SELECT sum(b.plan_amn)plan_amn,sum(b.fact_amnt)fact_amnt,a.pro_line,a.schedule_id,a.org_id,b.material,concat(isnull(b.material_name,''),' | ',isnull(b.material_model,'')) AS mater_info FROM produceTmp as a LEFT JOIN q_dosage b ON b.org_id = a.org_id AND a.pro_line = b.pro_line AND a.schedule_id = b.schedule_id GROUP BY mater_info,a.pro_line,a.schedule_id,a.org_id,material),supplementTmp AS ( SELECT a.id,cast(a.id as string) as schedule_id,a.org_id,dat_tim,vehicle,CAST(isnull(prod_mete,0) AS decimal(28,3)) car_amnt,isnull(labour_name,'')                      labour_name,CAST(isnull(prod_mete,0) AS decimal(28,3)) trans_mete,pro_line,reciepe_no,bet_lev,'' customer,''project_name,a.auditor  AS                                  operator,cons_pos,a.org_name AS                                  station,a.material_name,a.material_unit,a.material_model,concat(isnull(material_name,''),' | ',isnull(material_model,'')) AS mater_info FROM q_manual_supplement as a  WHERE a.org_id IN (SELECT child_org_id FROM orgs) AND a.is_audit = TRUE AND a.is_removed = FALSE AND a.is_productionsystem = TRUE   and dat_tim between '2018-01-01 00:00:00'  and '2022-05-18 19:10:36'  ),supplementData AS (SELECT a.dat_tim,cast(a.id as string) as schedule_id,a.org_id,a.vehicle,a.car_amnt,a.labour_name,a.trans_mete,a.pro_line,'' material_unit,a.reciepe_no,a.bet_lev,'' material_name,'' material_model,a.operator,'' customer,'' project_name,a.cons_pos,a.station,'' material,concat(isnull(b.material_name,''),isnull(b.material_model,'')) AS mater_info,CAST(isnull(b.fact_amnt,0) AS decimal(28,3))plan_amn,CAST(isnull(b.fact_amnt,0) AS decimal(28,3))fact_amnt FROM supplementTmp AS a INNER JOIN q_manual_supplement_item AS b ON a.id = b.order_id AND a.org_id = b.org_id AND b.is_removed = FALSE),itemsData as(select plan_amn,fact_amnt,mater_info,pro_line,org_id,schedule_id,material from produceData union all select plan_amn,fact_amnt,mater_info,pro_line,org_id,schedule_id,material from supplementData),allData as(select org_id,dat_tim,schedule_id,mater_info,labour_name,vehicle,car_amnt,trans_mete,material_unit,reciepe_no,bet_lev,material_name,material_model,pro_line,operator,customer,project_name,cons_pos,station from produceTmp union all select org_id,dat_tim,schedule_id,mater_info,labour_name,vehicle,car_amnt,trans_mete,material_unit,reciepe_no,bet_lev,material_name,material_model,pro_line,operator,customer,project_name,cons_pos,station from supplementTmp),A as(select  pro_line,org_id,schedule_id,material,mater_info,sum(plan_amn) plan_amn,sum(fact_amnt) fact_amnt from itemsData GROUP BY pro_line,org_id,schedule_id,material,mater_info)select B.dat_tim,B.labour_name,B.vehicle,B.car_amnt,B.trans_mete,B.material_unit,B.reciepe_no,B.bet_lev,B.material_name,B.material_model,B.operator,B.customer,B.project_name,B.cons_pos,B.station,A.* from A as A left join allData as B on A.pro_line = B.pro_line and A.org_id=B.org_id and A.schedule_id = B.schedule_id  order by B.dat_tim desc limit 1000000 offset 0 ) as temp_a group by temp_a.material,temp_a.mater_info order by temp_a.material,temp_a.mater_info desc
 ```
 
-SQL4:
+SQL5:
 
 ```sql
 /* from:'node-ca-concrete-service', addr:'10.180.38.176' */
@@ -357,6 +423,202 @@ with orgs as ( -- 实际,标准,偏差
       )
         select * from result order by material_name
 ```
+
+SQL6：
+
+s_material嵌入dosage语句块，避免把几千万条数据从q_dosage取出来
+
+```mysql
+/* from:'node-mr-mquantity-product-service', addr:'10.180.59.223' */
+with 
+    -- 指定统计类下挂接的材料id
+    s_material as (
+      select distinct material_id from g_statistic_category_material
+      where statistic_id = 450949003816960
+      and is_removed=false
+    ),
+    
+    -- 查询开累计划量
+    kl_plan as (
+      select material_id,material_unit,sum(isnull(quantity,0)) quantity from m_gh_plan_check
+      where org_id in (...)
+      and is_removed=false
+      and is_audit = true
+      and gh_id is not null
+      and material_id in (
+        select material_id from s_material
+      )
+      group by material_id,material_unit
+    ),
+    -- 本期收料量
+    receive as (
+      select material_id,material_unit,sum(quantity) receive_quantity from (
+        select material_id,material_unit,isnull(case when service_type*order_type >0 then net_quantity else -net_quantity end,0) quantity 
+        from q_receive_more_material
+        where org_id in (...)
+        and is_removed=false
+        and order_id in (
+          select id from q_receive
+          where org_id in (...)
+          and (order_origin=0 or (order_origin!=0 and is_audit=true))
+          and exit_time>= '1900-01-01 00:00:00' and exit_time<= '2022-06-01 17:20:46'
+          and is_removed=false
+        )
+        and material_id in (
+          select material_id from s_material
+        )
+        union all
+        select material_id,material_unit,isnull(case when service_type*order_type >0 then net_quantity else -net_quantity end,0) quantity 
+        from q_receive_more_material_temp_data
+        where org_id in (...)
+        and is_removed=false
+        and order_id in (
+          select id from q_receive_temp_data
+          where org_id in (...)
+          and exit_time>= '1900-01-01 00:00:00' and exit_time<= '2022-06-01 17:20:46'
+          and is_removed=false
+        )
+        and material_id in (
+          select material_id from s_material
+        )
+        and is_marched=false
+        union all
+        select material_id,material_unit,isnull(b.quantity,0) quantity  
+        from q_waste a 
+        inner join q_waste_item b
+        on a.org_id=b.org_id and a.id=b.order_id
+        where a.org_id in (...) 
+        and a.recycle_date>= '1900-01-01 00:00:00' and recycle_date<= '2022-06-01 17:20:46'
+        and is_audit=1  
+        and a.is_removed=false  
+        and b.is_removed=false
+        and material_id in (
+          select material_id from s_material
+        )
+      ) a
+      group by material_id,material_unit
+      ),
+      -- 本期发料数据
+      delivery as (
+        select material_id,material_unit,sum(quantity) delivery_quantity from (
+          select material_id,material_unit,isnull(case when service_type*order_type>0 then net_quantity else -net_quantity end,0) quantity
+          from q_delivery_more_material
+          where org_id in (...)
+          and is_removed=false
+          and order_id in (
+            select id from q_delivery
+            where org_id in (...)
+            and (order_origin=0 or (order_origin!=0 and is_audit=true))
+            and exit_time>= '1900-01-01 00:00:00' and exit_time<= '2022-06-01 17:20:46'
+            and is_removed=false
+            and id not in (
+              select id from q_delivery_weight 
+              where org_id in (...)
+              and isnull(weight_type,'')='进料过磅'
+              )
+          )
+          and material_id in (select material_id from s_material)
+          union all
+          select material_id,material_unit,isnull(case when service_type*order_type>0 then net_quantity else -net_quantity end,0) quantity
+          from q_delivery_more_material_temp_data
+          where org_id in (...)
+          and is_removed=false
+          and order_id in (
+            select id from q_delivery_temp_data
+            where org_id in (...)
+            and exit_time>= '1900-01-01 00:00:00' and exit_time<= '2022-06-01 17:20:46'
+            and is_removed=false
+            and isnull(weight_type,'')!='进料过磅'
+          )
+          and material_id in (select material_id from s_material)
+          and is_marched=false
+        ) a
+        group by material_id,material_unit
+      ),
+      -- 本期机楼消耗数据 + 手工下料 + 补录
+      dosage as (
+        select material_id,material_unit,sum(isnull(fact_amnt,0)) fact_amnt from (
+        select material_id,'吨' material_unit,sum(isnull(fact_amnt,0))/1000 fact_amnt
+          from q_dosage
+          where org_id in (...)
+          and is_removed=false
+          and material_id in (select material_id from s_material)
+          and dat_tim >= '1900-01-01 00:00:00' and dat_tim <= '2022-06-01 17:20:46'
+          group by material_id
+          union all
+          select material_id,'吨' material_unit,sum(isnull(fact_amnt,0))/1000 fact_amnt 
+          from q_manual
+          where org_id in (...) 
+          and dat_tim>= '1900-01-01 00:00:00'  and dat_tim<= '2022-06-01 17:20:46' 
+          and is_removed=false
+          and material_id in (select material_id from s_material)
+          group by material_id
+          union all
+          select b.material_id,'吨' material_unit,sum(isnull(fact_amnt,0))/1000 fact_amnt 
+          from q_manual_supplement as a
+          inner join q_manual_supplement_item b 
+          on a.org_id=b.org_id and a.id=b.order_id
+          where a.org_id in (...)
+          and b.org_id in (...)
+          and a.is_audit=true
+          and a.is_productionsystem = true 
+          and dat_tim>= '1900-01-01 00:00:00' and dat_tim<= '2022-06-01 17:20:46'
+          and b.material_id in (select material_id from s_material)
+          and a.is_removed=false 
+          and b.is_removed=false
+          group by b.material_id
+          ) a
+          group by material_id,material_unit
+      ), 
+
+
+      -- 合并材料信息
+      all_material as(
+        select material_id, material_unit,receive_quantity,delivery_quantity,fact_amnt,type from (
+          select material_id,material_unit,receive_quantity,0 delivery_quantity,0 fact_amnt,'receive' type from receive
+          union all
+          select material_id,material_unit,0 receive_quantity,delivery_quantity,0 fact_amnt,'delivery' type from delivery
+          
+             union all 
+             select material_id,material_unit,0 receive_quantity,0 delivery_quantity,fact_amnt,'dosage' type from dosage
+             
+        ) a
+      ),
+      convert_quantity as (
+        select sum(receive_quantity/isnull(conversion_factor,1)) receive_quantity,
+        sum(delivery_quantity/isnull(conversion_factor,1)) delivery_quantity,
+        sum(fact_amnt/isnull(conversion_factor,1)) fact_amnt
+        from all_material a
+        left join(
+          select distinct statistic_id,conversion_unit,
+                 case isnull(conversion_factor,0) when 0 then 1  else conversion_factor end conversion_factor
+            from g_statistic_category_unit
+          where statistic_id = 450949003816960 and is_removed=false
+        ) b
+        on a.material_unit = b.conversion_unit
+      ),
+      kl_quantity as (
+        select sum(quantity/isnull(conversion_factor,1)) plan_quantity
+        from kl_plan a
+        left join (
+          select distinct statistic_id,conversion_unit,
+          -- conversion_factor
+           case isnull(conversion_factor,0) when 0 then 1 else conversion_factor end conversion_factor
+           from g_statistic_category_unit
+          where statistic_id = 450949003816960 and is_removed=false
+        ) b
+        on a.material_unit = b.conversion_unit
+      )
+      select round(isnull(a.receive_quantity,0),0) receive_quantity,
+      round(isnull(a.delivery_quantity,0),0) mq_delivery_quantity,
+      round(isnull(a.fact_amnt,0),0) fact_amnt,
+      round(isnull(b.plan_quantity,0),0) plan_quantity,
+      round(isnull(a.delivery_quantity,0)+isnull(a.fact_amnt,0),0) delivery_quantity
+      from convert_quantity a, kl_quantity b
+   
+```
+
+
 
 ## cast返回结果不同
 
@@ -499,6 +761,101 @@ with qLabourAllot as (
                 and item_bar_code in (select item_bar_code from qLabourAllot  where org_id= 749816950517760 and order_id = 1275015682283008 and is_removed=false    and material_name like '%%'  and material_model like '%%'  ))b
                 on a.item_bar_code = b.item_bar_code
                 order by a.sort_code
+```
+
+SQL3
+
+这个跟SQL2问题一样，应该是拷贝的
+
+```mysql
+/* from:'node-mq-mquantity-service', addr:'10.180.125.199' */
+with delivery as (
+               select id , order_id , org_id , material_id,ori_material_id, material_code, material_name, material_model,material_unit,net_quantity,class_id,ori_class_id,class_full_id, ori_org_id , item_bar_code,sort_code,auxiliary_unit, remark from q_delivery_more_material
+                      where org_id= 873711305765376 and order_id = 1284897477776384 and is_removed=false    and material_name like '%%'  and material_model like '%%'  )
+              SELECT a.*,b.manufacturer,b.batch_no, b.test_report_no, b.storage_place,b.skill_card_no,a.remark,b.remark item_remark,b.service_type,b.order_type,b.quality_certificate,b.tax_free_price,b.tax_free_sum
+              FROM delivery a
+               left join
+               (select manufacturer,batch_no, test_report_no, storage_place,skill_card_no, auxiliary_unit, item_bar_code,service_type,order_type,quality_certificate,remark,tax_free_price,tax_free_sum
+                from q_receive_more_material WHERE  org_id= 873711305765376 and is_removed=false and service_type>0 AND order_type=4
+                and item_bar_code in (select item_bar_code from delivery  where org_id= 873711305765376 and order_id = 1284897477776384 and is_removed=false    and material_name like '%%'  and material_model like '%%'  ))b 
+                on a.item_bar_code = b.item_bar_code
+                order by a.sort_code
+```
+
+SQL4:
+
+这个SQL写的本身没毛病，但是很依赖引擎的优化能力
+
+ from project_bill_quantity_detail as bc
+  join project_bill_quantity_detail as bp
+
+在tidb的执行计划里，这两个表的join，发生在bc的in条件应用之前了
+
+因为in本身也会翻译成join，哪个join先执行不同引擎会有不同策略
+
+建议把SQL改写为，bc连带其条件，再放入一个with语句块中
+
+```mysql
+/* from:'iquantity-template-service', addr:'10.180.38.79' */
+with bill_detail as (
+  select distinct
+    b.project_bill_quantity_id
+    , q.project_bill_quantity_detail_id
+    , b.org_id
+  from cq_quantity_resume_part_quantity as q
+  join project_bill_quantity_detail as b
+    on b.is_removed = false
+    and b.id = q.project_bill_quantity_detail_id
+  where q.is_removed = false
+    and q.org_id = 795688512802816
+    and q.quantity_resume_part_id = 1253560065365437
+)
+select
+  t.id
+  , t.parent_id
+  , t.full_id
+  , t.code
+  , t.name
+  , t.unit
+from (
+  select
+    b.id
+    , -1 as parent_id
+    , cast(b.id as string) as full_id
+    , ifnull(b.code, '') as code
+    , ifnull(b.name, '') as name
+    , null as unit
+    , 1 as level
+    , b.id as order_no
+  from project_bill_quantity as b
+  where b.is_removed = false
+    and b.id in (select project_bill_quantity_id from bill_detail)
+
+  union all
+
+  select distinct
+    bp.id
+    , if(bp.parent_id = -1, bp.project_bill_quantity_id, bp.parent_id) as parent_id
+    , concat_ws('|', cast(bp.project_bill_quantity_id as string), bp.full_id) as full_id
+    , ifnull(bp.code, '') as code
+    , ifnull(bp.name, '') as name
+    , bp.unit
+    , 2 as level
+    , bp.order_no
+  from project_bill_quantity_detail as bc
+  join project_bill_quantity_detail as bp
+    on bp.is_removed = false
+    and bp.org_id = bc.org_id
+    and bp.project_bill_quantity_id = bc.project_bill_quantity_id
+    and locate(bp.full_id, bc.full_id) > 0
+  where bc.is_removed = false
+    and bc.org_id in (select org_id from bill_detail)
+    and bc.id in (select project_bill_quantity_detail_id from bill_detail)
+) as t
+order by
+  t.level
+  , t.order_no
+;
 ```
 
 
@@ -1111,6 +1468,10 @@ update cq_command_bill_quantity_split
 
 ## 非空字段插入了空值
 
+impala的处理很宽松，违反空值约束不会报错，只会有一句提示，程序中没处理
+
+但是违反空值约束是插不进去的，属于比较严重的bug，不知道为啥业务上没发现
+
 SQL1：
 
 code是非空字段
@@ -1134,7 +1495,7 @@ SQL3:
 
 period_plan_detail_id 是非空字段
 
-```
+```mysql
 INSERT INTO cr9g_custom.cr9g_project_period_progress_detail (org_id,id,period_progress_id,period_plan_detail_id,actual_start_date,actual_end_date,actual_progress,actual_effect_target,complete_quantity,surplus_quantity,is_complete,remark,created_at,updated_at,creator,reviser,version) VALUES (1259690140572136,1294622101566464,1294109876786688,1294099193641483,'2022-01-01 00:00:00.0',null,null,null,null,null,null,null,'2022-06-15 09:15:39.614','2022-06-15 09:15:39.614',1259721658088936,1259721658088936,1294622101575168)
 /*& tenant:cr9g */
 /*& $replace:tenant */ ,(1259690140572136,1294622101740520,1294109876786688,1294099193641487,'2022-01-01 00:00:00.0',null,null,null,null,null,null,null,'2022-06-15 09:15:39.635','2022-06-15 09:15:39.635',1259721658088936,1259721658088936,1294622101756881) ,(1259690140572136,1294622102526976,1294109876786688,null,null,null,null,null,null,null,null,null,'2022-06-15 09:15:39.731','2022-06-15 09:15:39.731',1259721658088936,1259721658088936,1294622102534632) ,
@@ -1145,10 +1506,30 @@ SQL4:
 
 is_removed 是非空字段
 
-```
+```mysql
 /* from:'node-mq2-rds-service', addr:'10.180.184.138' */
 INSERT INTO `q_receive_more_material` (`id`,`org_id`,`order_id`,`service_type`,`order_type`,`is_red`,`item_data_id`,`submit_date`,`material_id`,`material_code`,`material_name`,`material_model`,`material_unit`,`class_id`,`class_full_id`,`receive_price`,`auxiliary_unit`,`net_quantity`,`rough_quantity`,`conversion_rate`,`deduct_rate`,`deduct_quantity`,`ori_net_quantity`,`auxiliary_net_quantity`,`main_net_quantity`,`waybill_weight`,`item_bar_code`,`manufacturer`,`batch_no`,`test_report_no`,`storage_place`,`stockbin_id`,`stockbin_full_name`,`ori_stockbin_id`,`skill_card_no`,`quality_certificate`,`remark`,`sort_code`,`is_accounted`,`accountor`,`account_date`,`check_state`,`account_order_id`,`acceptance_record`,`ori_material_id`,`ori_class_id`,`ori_common_id`,`ori_item_id`,`ori_plan_id`,`ori_order_id`,`ori_org_id`,`is_removed`,`tax_rate`,`tax_free_price`,`tax_free_sum`,`tax_included_price`,`tax_included_sum`,`tax_amount`,`freight`,`is_void`,`is_accounted_eg`,`creator_id`,`type_mark`,`creator_name`,`created_at`,`modifier_id`,`modifier_name`,`updated_at`,`version`) VALUES (1294637429944832,1165089319505920,1294652334061568,10,4,false,NULL,'2022-06-15',651631265404135,'00090','外贴式橡胶止水带',' E2-3型350mm*10mm','米',NULL,NULL,0,NULL,1250,1250,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'P202206151017105wfx','','','','',0,NULL,NULL,'','',NULL,1,false,NULL,NULL,0,NULL,NULL,NULL,NULL,NULL,NULL,0,NULL,'',false,NULL,0,0,0,0,0,0,false,false,1174987211796480,'批次维度','','2022-06-15 09:46:50.756000',1174987211796480,'','2022-06-15 10:17:10.508000',1294637429944832),(1294652337370625,1165089319505920,1294652334061568,10,4,false,NULL,'2022-06-15',651631265404179,'00134','中埋式钢边橡胶止水带','350*10mm','米',NULL,NULL,NULL,NULL,550,550,NULL,NULL,NULL,NULL,NULL,NULL,NULL,'P20220615101710aTvt','','','','',NULL,NULL,NULL,'','',NULL,2,false,NULL,NULL,0,NULL,NULL,NULL,NULL,NULL,NULL,0,NULL,'',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,false,1174987211796480,'批次维度','','2022-06-15 10:17:10.511000',1174987211796480,'','2022-06-15 10:17:10.509000',1294652337370625);
 
+```
+
+SQL5:
+
+project_id 是非空字段
+
+```mysql
+INSERT INTO gxlq_custom.gxlq_group_issued_quarter_plan_detail (org_id,id,project_id,quarter_plan_id,year_plan,year_after_next,next_year_plan,quarter_plan,january_plan,february_plan,march_plan,april_plan,may_plan,june_plan,july_plan,august_plan,september_plan,october_plan,november_plan,december_plan,is_removed,created_at,updated_at,creator,reviser,version,company_id) VALUES (784341625253889,1284356264317440,null,1284356109948928,0.0,null,null,0.0,null,null,null,null,null,null,null,null,null,null,null,null,false,'2022-05-31 21:09:45.653','2022-05-31 21:09:45.653',591141949961216,591141949961216,1284356264342528,784497769845760)
+/*& tenant:gxlq */
+/*& $replace:tenant */
+```
+
+SQL6:
+
+project_id 是非空字段
+
+```mysql
+INSERT INTO gxlq_custom.gxlq_company_reported_quarter_plan_detail (org_id,id,project_id,quarter_plan_id,year_plan,next_year_plan,quarter_plan,january_plan,february_plan,march_plan,april_plan,may_plan,june_plan,july_plan,august_plan,september_plan,october_plan,november_plan,december_plan,is_removed,created_at,updated_at,creator,reviser,version,contract_valid_price,total_amount,year_amount,first_quarter_amount,second_quarter_amount,third_quarter_amount,fourth_quarter_amount,remark,is_finished) VALUES (784497769845760,1284356899404288,null,1284355654775808,0.0,null,0.0,null,null,null,null,null,null,null,null,null,null,null,null,false,'2022-05-31 21:11:03.179','2022-05-31 21:11:03.179',591141949961216,591141949961216,1284356899420672,null,null,0.0,null,null,null,null,null,null)
+/*& tenant:gxlq */
+/*& $replace:tenant */
 ```
 
 
@@ -1245,6 +1626,37 @@ SQL8:
 /* from:'excel-service', addr:'10.180.59.254' */
 UPSERT INTO hr_strength_employee (excel_task_id, org_id, id, version, creator, reviser, created_at, updated_at, year, month, employment_nature, department, person_name, person_id, post, person_class, job_title, job_title_level, job_title_start_time, sal_level, actual_send_total, should_send_total, deduction_total, project_stimulate, endowment_insurance, unemployment_insurance, medical_insurance, housing_provident_fund, employment_injury_insurance, month_bonus, remark) VALUES('excel:iquantity:import:10051:768982698176512:1653881155615', 759005196121088, 1283361557517312, 1283361557517312, 768982698176512, 768982698176512, NOW(), NOW(), 2022, 4, '实力员工', '项目领导', '吴罡令', '500237198403028939', '常务副经理（主持工作）兼任党工委副书记', '管理人员', '工程师', '中级', '6-30-07', '16-3', 8455.45, 11747, 3291.55, 2132, 1103.2, 41.37, 275.8, 1654.8, 172.38, 0, null),('excel:iquantity:import:10051:768982698176512:1653881155615', 759005196121088, 1283361557517313, 1283361557517313, 768982698176512, 768982698176512, NOW(), NOW(), 2022, 4, '实力员工', '财务部', '刘艳琴', '130103198011130020', '部长', '管理人员', '助理会计师', '助理级', '#REF!', '18-5', 7890.46, 10633, 2742.54, 1540, 918.4, 34.44, 229.6, 1377.6, 143.5, 0, null),('excel:iquantity:import:10051:768982698176512:1653881155615', 759005196121088, 1283361557517314, 1283361557517314, 768982698176512, 768982698176512, NOW(), NOW(), 2022, 4, null, null, null, null, null, null, null, null, null, null, null, null, null, 0, null, null, null, null, null, 0, null)
 ```
+
+SQL9:
+
+出现了这样的日期字符串：'Invalid date'
+
+```mysql
+/* from:'itask-service-v2', addr:'10.180.88.164' */
+UPDATE `project_work_deadline` SET `parent_id`=1066046439330816,`name`='武家塬隧道1#斜井大里程',`node_type`='controlDate',`plan_start_date`=null,`plan_end_date`='2023-12-23 00:00:00.000000',`adjustment_start_date`='Invalid date',`adjustment_end_date`='2023-12-23 00:00:00.000000',`adjustment_version`=0,`duration`=null,`actual_start_date`=null,`actual_end_date`=null,`full_id`='1066046439330816|1069066441298432',`full_id_ex`='|1066046439330816|1069066441298432|',`is_leaf`=true,`level`=2,`order_no`=1066400559394819,`remark`=null,`reviser`=1062672453710848,`updated_at`='2022-06-01 14:38:49.334000',`version`=1284871898723840 WHERE `id` = 1069066441298432 AND `org_id` = 1025872933156864
+```
+
+SQL10:
+
+Incorrect datetime value: 'NaN-aN-aN aN:aN:aN'
+
+```mysql
+/* from:'itask-service-v2', addr:'10.180.88.164' */
+UPDATE project_plan_detail SET stat_actual_start_date=CASE id WHEN 892144663319040 THEN '2020-09-16 00:00:00' WHEN 892144789894144 THEN '2020-09-16 00:00:00' WHEN 892144982520320 THEN null WHEN 892145065136128 THEN null WHEN 892145569263616 THEN null WHEN 892146581688320 THEN null WHEN 892145274647040 THEN null WHEN 892145135735808 THEN null WHEN 892146196115456 THEN null WHEN 892146309968896 THEN null WHEN 892146390610944 THEN null ELSE stat_actual_start_date END, stat_actual_end_date=CASE id WHEN 892144663319040 THEN null WHEN 892144789894144 THEN null WHEN 892144982520320 THEN null WHEN 892145065136128 THEN null WHEN 892145569263616 THEN null WHEN 892146581688320 THEN null WHEN 892145274647040 THEN null WHEN 892145135735808 THEN null WHEN 892146196115456 THEN null WHEN 892146309968896 THEN null WHEN 892146390610944 THEN null ELSE stat_actual_end_date END, stat_est_end_date=CASE id WHEN 892144663319040 THEN '2022-07-27 00:00:00' WHEN 892144789894144 THEN '2022-06-01 00:00:00' WHEN 892144982520320 THEN '2022-06-25 00:00:00' WHEN 892145065136128 THEN '2022-07-16 00:00:00' WHEN 892145569263616 THEN '2022-07-27 00:00:00' WHEN 892146581688320 THEN '2022-06-01 00:00:00' WHEN 892145274647040 THEN '2022-06-10 00:00:00' WHEN 892145135735808 THEN '2022-07-27 00:00:00' WHEN 892146196115456 THEN '2022-06-16 00:00:00' WHEN 892146309968896 THEN '2022-06-11 00:00:00' WHEN 892146390610944 THEN 'NaN-aN-aN aN:aN:aN' ELSE stat_est_end_date END, stat_est_start_date=CASE id WHEN 892144663319040 THEN '2020-09-16 00:00:00' WHEN 892144789894144 THEN '2020-09-16 00:00:00' WHEN 892144982520320 THEN '2022-06-01 00:00:00' WHEN 892145065136128 THEN '2022-06-01 00:00:00' WHEN 892145569263616 THEN '2022-06-01 00:00:00' WHEN 892146581688320 THEN '2022-06-01 00:00:00' WHEN 892145274647040 THEN '2022-06-01 00:00:00' WHEN 892145135735808 THEN '2022-06-01 00:00:00' WHEN 892146196115456 THEN '2022-06-01 00:00:00' WHEN 892146309968896 THEN '2022-06-01 00:00:00' WHEN 892146390610944 THEN 'NaN-aN-aN aN:aN:aN' ELSE stat_est_start_date END, version=1284513946449408, reviser=882002296738304, updated_at=NOW() WHERE  id IN (892144663319040, 892144789894144, 892144982520320, 892145065136128, 892145569263616, 892146581688320, 892145274647040, 892145135735808, 892146196115456, 892146309968896, 892146390610944)
+```
+
+SQL11:
+
+'2022-05-30-2020-12-30' for column 'cert_valid_date'
+
+```mysql
+/* from:'excel-service', addr:'10.180.180.216' */
+UPSERT INTO contractor (excel_task_id, org_id, id, version, creator, reviser, created_at, updated_at, original_org_id, code, company_name, credit_code, credit_code_valid_date, is_credit_code_perpetual, cert_level_range, cert_number, cert_valid_date, is_cert_perpetual, type, business_scope, registration_city, registration_address, bank_name, bank_account, registered_capital, taxpayer_type, corporation_name, corporation_identity_number, corporation_phone_number, license_number, license_valid_date, is_license_perpetual, is_external, contractor_evaluation_id, excel_spared, remark) VALUES(
+...
+)
+```
+
+
 
 # 拼接的SQL太长
 
