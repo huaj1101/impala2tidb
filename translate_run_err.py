@@ -80,11 +80,11 @@ def run_one(query_id, sql_type, catalog, tiflash_only):
     conn.close()
     return True
 
-def run():
+def run(catalog):
     with utils.get_tidb_conn() as conn:
         sql = f'select te.query_id, ts.sql_type, te.catalog, ts.tiflash_only from test.translate_err te \
                 join test.`translate_sqls` ts on ts.`query_id` = te.`query_id` \
-                where te.catalog in ("not_processed") and te.sql_date="{_date}"'
+                where te.catalog in ("{catalog}") and te.sql_date="{_date}" '
         df = utils.get_tidb_data(conn, sql)
     total_count = len(df)
     success_count = 0
@@ -100,13 +100,17 @@ def run():
             logger.info(f'{i+1} / {total_count} {query_id} still fail')
     logger.info(f'{success_count} / {total_count} success')
 
-def run_endless():
+def run_endless(catalog):
     while True:
-        run()
+        run(catalog)
         time.sleep(5)
 
 if __name__ == '__main__':
-    if len(sys.argv) == 2 and sys.argv[1] == 'endless':
-        run_endless()
+    if len(sys.argv) < 2:
+        logger.error('param shoud be: catalog')
+        sys.exit(1)
+    catalog = sys.argv[1]
+    if len(sys.argv) == 3 and sys.argv[2] == 'endless':
+        run_endless(catalog)
     else:
-        run()
+        run(catalog)
