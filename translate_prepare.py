@@ -189,11 +189,14 @@ def run(second_time):
     manager = Manager()
     _share_dict = manager.dict()
     _share_dict['sql_date'] = _date
-    _share_dict['start_time'] = time.time()
     _share_dict['second_time'] = second_time
     _share_dict['error_count'] = 0
-    start_fill_task_procs(5)
-    start_exec_task_procs(5)
+    logger.info('waiting for the first batch......')
+    start_fill_task_procs(18)
+    while _task_queue.qsize() == 0:
+        time.sleep(0.1)
+    _share_dict['start_time'] = time.time()
+    start_exec_task_procs(10)
     start_clean_task_proc()
     try:
         while True:

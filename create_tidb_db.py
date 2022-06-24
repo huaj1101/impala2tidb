@@ -51,24 +51,6 @@ def drop_one_db(db, db_schema, total_count):
     logger.info('(%d / %d) %s finish in %.1f seconds' % (finish_count, total_count, db, time_used))
     lock.release()
 
-@utils.timeit
-def run(action):
-    files = []
-    for file in os.listdir('schemas/'):
-        if file.endswith('.json'):
-            files.append(file)
-    files.sort()
-    # files = ['global_mtlp.json']
-    func = drop_one_db if action == 'drop' else recreate_one_db
-    pool = ThreadPoolExecutor(max_workers=15)
-    for file in files:
-        db = file.replace('.json', '')
-        with open(f'schemas/{file}', 'r', encoding='utf-8') as f:
-            schema_text = f.read()
-            db_schema = json.loads(schema_text)
-        pool.submit(func, db, db_schema, len(files))
-    pool.shutdown(wait=True)
-
 @utils.thread_method
 def recreate_mismatch_table(table_schema, total_count):
     start = time.time()
@@ -110,6 +92,39 @@ def run_mismatch():
         pool.submit(recreate_mismatch_table, table_schema, len(table_schemas))
     pool.shutdown(wait=True)
 
+def add_index():
+    with utils.get_tidb_conn() as conn:
+        logger.info('add index to global_mtlp.q_piece')
+        conn.execute('alter table global_mtlp.q_piece add index (tenant, org_id, schedule_id, pro_line, piece_id)')
+        logger.info('add index to global_mtlp.q_dosage')
+        conn.execute('alter table global_mtlp.q_dosage add index (tenant, org_id, dosage_id, schedule_id, piece_id, pro_line)')
+        logger.info('add index to global_mtlp.q_produce')
+        conn.execute('alter table global_mtlp.q_produce add index (tenant, org_id, schedule_id, pro_line)')
+        logger.info('add index to global_mtlp.m_gh_plan_check')
+        conn.execute('alter table global_mtlp.m_gh_plan_check add index (tenant, org_id, ori_gh_id)')
+        logger.info('add index to global_mtlp.q_inventory')
+        conn.execute('alter table global_mtlp.q_inventory add index (tenant, org_id, item_bar_code)')
+
+@utils.timeit
+def run(action):
+    files = []
+    for file in os.listdir('schemas/'):
+        if file.endswith('.json'):
+            files.append(file)
+    files.sort()
+    # files = ['global_mtlp.json']
+    func = drop_one_db if action == 'drop' else recreate_one_db
+    pool = ThreadPoolExecutor(max_workers=15)
+    for file in files:
+        db = file.replace('.json', '')
+        with open(f'schemas/{file}', 'r', encoding='utf-8') as f:
+            schema_text = f.read()
+            db_schema = json.loads(schema_text)
+        pool.submit(func, db, db_schema, len(files))
+    pool.shutdown(wait=True)
+    if action == 'recreate':
+        add_index()
+
 if __name__ == '__main__':
     action = ''
     if len(sys.argv) == 2:
@@ -121,9 +136,3 @@ if __name__ == '__main__':
     else:
         logger.error('param shoud be: drop / recreate / mismatch')
 
-
-# alter table global_mtlp.q_piece add index (tenant, org_id, schedule_id, pro_line, piece_id)
-# alter table global_mtlp.q_dosage add index (tenant, org_id, dosage_id, schedule_id, piece_id, pro_line)
-# alter table global_mtlp.q_produce add index (tenant, org_id, schedule_id, pro_line)
-# alter table global_mtlp.m_gh_plan_check add index (tenant, org_id, ori_gh_id)
-# alter table global_mtlp.q_inventory add index (tenant, org_id, item_bar_code)

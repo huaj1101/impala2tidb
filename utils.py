@@ -101,12 +101,13 @@ def get_tidb_conn(auto_commit=True, tiflash_only=False) -> sqlalchemy.engine.Con
         db = conf.get('tidb', 'db')
         con_str = f'mysql+mysqldb://{user}:{pwd}@{host}:{port}/{db}?charset=utf8'
         _tidb_engine = sqlalchemy.create_engine(con_str, pool_size=20, max_overflow=20)
-        _readonly_tidb_engine = sqlalchemy.create_engine(con_str, pool_reset_on_return=None, pool_size=20, max_overflow=20)
-    if auto_commit:
-        conn = _tidb_engine.connect()
-    else:
-        conn = _readonly_tidb_engine.connect()
-        conn.execute(f'set autocommit=0')
+        # _readonly_tidb_engine = sqlalchemy.create_engine(con_str, pool_reset_on_return=None, pool_size=20, max_overflow=20)
+    conn = _tidb_engine.connect()
+    # if auto_commit:
+    #     conn = _tidb_engine.connect()
+    # else:
+    #     conn = _readonly_tidb_engine.connect()
+    #     conn.execute(f'set autocommit=0')
     conn.execute(f'set @@session.tidb_isolation_read_engines = "{"tikv," if not tiflash_only else ""}tidb,tiflash"')
     return conn
 
