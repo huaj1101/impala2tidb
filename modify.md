@@ -858,6 +858,116 @@ order by
 ;
 ```
 
+SQL5:
+
+d_date表数据量很大，join的时候加上org_id的关联条件
+
+```
+select temp.id,
+           temp.org_id,
+           temp.editor,
+           temp.reviewer,
+           temp.stat_year,
+           temp.stat_month,
+           temp.stat_month_start,
+           temp.stat_date,
+           temp.complete_amount,
+           temp.amount,
+           sum(daily_task_detail.plan_amount) plan_amount_other,
+           sum(daily_task_detail.complete_amount) complete_amount_other
+from(
+with plan as( select    quarter_plan.org_id,
+                      quarter_plan.year,
+                      quarter_plan_detail.month,
+                      ifnull(sum(quarter_plan_detail.company_amount),0) as amount
+           from       ys2_custom.crfeb_company_quarter_plan quarter_plan
+           INNER JOIN ys2_custom.crfeb_company_quarter_plan_detail quarter_plan_detail on quarter_plan.id=quarter_plan_detail.quarter_plan_id
+           INNER JOIN global_platform.org_relation org                                         on org.child_org_id=quarter_plan_detail.project_id
+           INNER JOIN global_ipm.org_year_extras_info extras_info                              on extras_info.org_id=org.child_org_id and extras_info.year=quarter_plan.year and extras_info.in_hand=true and extras_info.is_removed=false
+           where      quarter_plan.is_removed=false and quarter_plan_detail.is_removed=false and org.child_ext_type="project" and org.org_id=5336179959952360 and org.top_project=true and quarter_plan.status=1
+           group by   quarter_plan.org_id,
+                      quarter_plan.year,
+                      quarter_plan_detail.month )
+select     month_task.id,
+           month_task.org_id,
+           month_task.editor,
+           month_task.reviewer,
+           da.stat_year,
+           da.stat_month,
+           da.stat_month_start,
+           month_task.stat_date,
+           sum(daily.complete_amount)    complete_amount,
+           plan.amount
+from       global_platform.org_relation org
+INNER JOIN ys2_custom.crfeb_project_month_task month_task               on org.org_id=month_task.org_id and month_task.is_removed=false
+INNER JOIN global_dwb.d_date da                                                 on da.id=concat('pr-c-',REPLACE(LEFT(CAST(month_task.stat_date as string),10),'-',''),'-',CAST(5336179959952360 as string))
+INNER JOIN global_ipm.org_year_extras_info extras_info                          on extras_info.org_id=org.child_org_id and extras_info.year=da.stat_year and extras_info.in_hand=true and extras_info.is_removed=false
+LEFT JOIN ys2_custom.crfeb_project_daily_report daily                  on org.child_org_id=daily.org_id and daily.is_removed=false and LEFT(CAST(daily.stat_date as string),10)>=da.stat_month_start and LEFT(CAST(daily.stat_date as string),10)<=month_task.stat_date
+LEFT JOIN  plan                                                                 on plan.org_id=month_task.org_id and plan.year=da.stat_year and plan.month=da.stat_month
+where      org.org_id=5336179959952360
+and org.child_ext_type="project" and org.top_project=true
+group by   month_task.id,
+           month_task.org_id,
+           month_task.editor,
+           month_task.reviewer,
+           da.stat_year,
+           da.stat_month,
+            da.stat_month_start,
+           month_task.stat_date,
+           plan.amount)temp
+ LEFT JOIN  ys2_custom.crfeb_company_dispatch_daily  daily_task_detail 
+on  daily_task_detail.org_id= temp.org_id and daily_task_detail.is_removed=false 
+and LEFT(CAST(daily_task_detail.stat_date as string),10)>=temp.stat_month_start
+and LEFT(CAST(daily_task_detail.stat_date as string),10)<=temp.stat_date     
+where 1=1
+group by temp.id,
+           temp.org_id,
+           temp.editor,
+           temp.reviewer,
+           temp.stat_year,
+           temp.stat_month,
+           temp.stat_month_start,
+           temp.stat_date,
+           temp.complete_amount,
+           temp.amount
+order by   temp.stat_date desc
+/*& tenant:ys2 */
+/*& $replace:tenant */
+```
+
+SQL6：
+
+tidb对这个SQL优化的不好，扫描记录数太多
+
+在最后加个条件缩小表范围 where __t.org_id in (612846781755491)
+
+```mysql
+/* from:'iquantity-jit-stats-service', addr:'10.180.12.148' */
+UPDATE __t SET
+__t.`result_formula` = __tmp.`result_formula`
+FROM project_quantity_formula AS __t
+INNER JOIN (
+VALUES (1786706395246 AS `id`, 612846781755491 AS `org_id`, '41.76 * 1' AS `result_formula`),
+(1786706395248, 612846781755491, '3.1 * 8 * 41 / 40'),
+(1786706395252, 612846781755491, '41.76 * 1'),
+(1786706395257, 612846781755491, '41.76 * 1'),
+(1786706395258, 612846781755491, '3 * 8 * 1'),
+(1786706395262, 612846781755491, '41.76 * 1'),
+(1786706395267, 612846781755491, '41.76 * 1'),
+(1786706395268, 612846781755491, '3 * 8 * 1'),
+(1786706395272, 612846781755491, '41.76 * 1'),
+(1786706395278, 612846781755491, '41.76 * 1'),
+(1786706395279, 612846781755491, '3 * 8 * 1'),
+(1786706395283, 612846781755491, '41.76 * 1'),
+(1786706395288, 612846781755491, '41.76 * 1'),
+(1786706395289, 612846781755491, '3 * 1 * 8'),
+(1786706395293, 612846781755491, '41.76 * 1'),
+(1786706395298, 612846781755491, '41.76 * 1'),
+(1786706395299, 612846781755491, '3 * 8 * 1'),
+(1786706395303, 612846781755491, '41.76 * 1')
+) AS __tmp ON __t.`id`=__tmp.`id` AND __t.`org_id`=__tmp.`org_id`
+```
+
 
 
 # SQL语法错误
@@ -1087,6 +1197,62 @@ WHERE
   AND TO_DATE(ssv.updated_at) >= TO_DATE('2022-04-21 00:00:00.000000')
   AND TO_DATE(ssv.updated_at) <= TO_DATE('2022-05-20 23:59:59.999000')
 HAVING ssvi.quantity-ssvi.monthly_quantity <> 0
+```
+
+SQL3：
+
+```mysql
+/* from:'node-mq2-plan-service', addr:'10.180.38.126' */
+with orgs as(
+                  select child_org_id from global_platform.org_relation where org_id = 1270576095704576
+              ),
+              planData as(
+                  select material_id,org_id,material_model,material_name,material_unit,material_code,
+                  sum(isnull(quantity,0)) quantity, -- 总计划量
+                  avg(book_price) book_price --计划价
+                  from m_gh_plan_check
+                    where org_id in(select child_org_id from orgs) and is_removed=false
+                    and gh_id>0 and is_audit=true
+                    group by material_id,org_id,material_model,material_name,material_unit,material_code
+              ),
+              supplyQuantity as(-- 已经采购数量(包含未提交数据)
+                  SELECT -- 采购计划材料
+                      isnull(sum(b.quantity),0) as quantity,
+                      a.org_id,b.material_id
+                      from(
+                          SELECT id,org_id from q_purchase_plan WHERE is_removed=FALSE and is_submit = true
+                          AND org_id in(select child_org_id from orgs) AND module_type=0
+                  ) as a
+                  join q_purchase_plan_item as b
+                  on a.org_id = b.org_id and a.id = b.order_id
+                  WHERE b.is_removed=FALSE
+                  GROUP BY a.org_id,b.material_id
+              ),
+              result as(
+                select
+                cast(isnull(a.quantity,0) as decimal(28,4)) as plan_quantity,-- 计划量
+                cast(isnull(a.book_price,0) as decimal(28,4)) as book_price,-- 计划价
+                cast(isnull(b.quantity,0) as decimal(28,4)) as purchase_quantity, -- 已采购量
+                cast((a.quantity - isnull(b.quantity,0)) as decimal(28,4)) as not_quantity, -- 剩余购量
+                a.org_id,a.material_id,a.material_model,a.material_code,a.material_name,a.material_unit
+                from planData as a
+                left join supplyQuantity as b
+                on a.org_id = b.org_id and a.material_id = b.material_id
+                where 1 =1
+                
+                
+                having (a.quantity - isnull(b.quantity,0))>0 -- 剩余量大于0
+              )
+              select isnull(b.inventory_quantity,0)inventory_quantity,a.* from result as a
+              left join (
+                  select
+                    material_id, org_id,
+                    sum(isnull(quantity,0)) inventory_quantity -- 实时库存
+                  from q_inventory
+                      where org_id in(select child_org_id from orgs) and is_removed=false
+                  group by material_id, org_id
+              ) as b on a.org_id = b.org_id and a.material_id = b.material_id
+              order by a.not_quantity desc
 ```
 
 
@@ -1406,6 +1572,73 @@ group by
 /*& $replace:tenant */
 ```
 
+SQL6:
+
+同上
+
+```mysql
+select 
+    closing_amount.id,
+    closing_amount.org_id,
+    closing_amount.year,
+    closing_amount.month,
+    closing_amount.source_explain, 
+    closing_amount.surplus_contract_amount, 
+    closing_amount.total_amount, 
+    closing_amount.year_amount, 
+    closing_amount.month_amount, 
+    round(isnull(closing_amount.contract_src_price, project.contract_src_price/10000),0) as '签订合同金额',
+    round(isnull(closing_amount.contract_amount,project.construction_master_plan/10000),0) as '有效合同金额',
+    round(sum(if(record.record_date>=isnull(last_year.stat_start, this_year.stat_month_start) && record.record_date<=closing_amount.stat_end,quantity.amount,0))/10000,0) as '本年完成产值',
+    round(sum(if(record.record_date>=isnull(closing_amount.stat_start, this_year.stat_month_start) && record.record_date<=closing_amount.stat_end,quantity.amount,0))/10000,0) as '本月完成产值',
+    round(sum(if(record.record_date<=closing_amount.stat_end,quantity.amount,0))/10000,0) as '开累产值'
+from gxlq_custom.gxlq_project_closing_amount closing_amount
+    left  join (--取本年之前成功上报公司的那条数据的统计截止日期+1
+                select org_id,
+                    date_add(stat_end,1) as stat_start
+                from gxlq_custom.gxlq_project_closing_amount 
+                where is_removed=false 
+                    and status=1 
+                    and org_id=1119960007774208
+                    and year<2022
+                order by year desc,month desc limit 1   
+                )last_year on closing_amount.org_id=last_year.org_id
+    -- left  join (--取第一条已上报的项目收尾日期后一年所在统计月开始日期
+    --             select 
+    --               d.org_id,
+    --                 d.stat_month_start
+    --             from global_dwb.d_month d 
+    --             where d.id=concat('pr-g-',cast(year((select closing_date from gxlq_custom.gxlq_project_closing_amount where org_id=1119960007774208 and status=1 and is_removed=false  order by year,month limit 1))+1 as string),'01-',cast(1119960007774208 as string))
+    --             )closing_year on closing_year.org_id=closing_amount.org_id
+    left  join (--取月报最后一条数据所在统计年的后一年所在统计月开始日期
+                select 
+                  d.org_id,
+                    d.stat_month_start
+                from global_dwb.d_month d 
+                where d.id=concat('pr-g-',cast((select year from gxlq_custom.gxlq_project_month_report where org_id=1119960007774208 and is_removed=false and status = 1 order by year desc, month desc limit 1)+1 as string),'01-',cast(1119960007774208 as string))
+                )this_year on this_year.org_id=closing_amount.org_id
+    left  join global_platform.project on closing_amount.org_id=project.org_id
+    left  join global_ipm.project_record record on closing_amount.org_id=record.org_id and record.is_removed=false 
+    left  join global_ipm.project_record_progress_quantity quantity on record.id=quantity.project_record_id and quantity.is_removed=false
+where closing_amount.is_removed=false
+    and closing_amount.org_id=1119960007774208
+    and closing_amount.id=1300485053133824
+group by 
+    closing_amount.id,
+    closing_amount.org_id,
+    closing_amount.year,
+    closing_amount.month,
+    closing_amount.source_explain, 
+    closing_amount.surplus_contract_amount, 
+    closing_amount.total_amount, 
+    closing_amount.year_amount, 
+    closing_amount.month_amount,
+    isnull(closing_amount.contract_src_price, project.contract_src_price/10000),
+    isnull(closing_amount.contract_amount,project.construction_master_plan/10000)
+/*& tenant:gxlq */
+/*& $replace:tenant */
+```
+
 
 
 ## 表别名不存在
@@ -1530,6 +1763,35 @@ project_id 是非空字段
 INSERT INTO gxlq_custom.gxlq_company_reported_quarter_plan_detail (org_id,id,project_id,quarter_plan_id,year_plan,next_year_plan,quarter_plan,january_plan,february_plan,march_plan,april_plan,may_plan,june_plan,july_plan,august_plan,september_plan,october_plan,november_plan,december_plan,is_removed,created_at,updated_at,creator,reviser,version,contract_valid_price,total_amount,year_amount,first_quarter_amount,second_quarter_amount,third_quarter_amount,fourth_quarter_amount,remark,is_finished) VALUES (784497769845760,1284356899404288,null,1284355654775808,0.0,null,0.0,null,null,null,null,null,null,null,null,null,null,null,null,false,'2022-05-31 21:11:03.179','2022-05-31 21:11:03.179',591141949961216,591141949961216,1284356899420672,null,null,0.0,null,null,null,null,null,null)
 /*& tenant:gxlq */
 /*& $replace:tenant */
+```
+
+SQL6:
+
+project_id是非空字段
+
+```mysql
+INSERT INTO gdcd_custom.gdcd_company_quarter_plan_detail (org_id,id,quarter_plan_id,project_id,year,quarter,month,company_amount,is_removed,created_at,updated_at,creator,reviser,version) VALUES (1269830794885120,1301133418486784,1301133309393408,1270093982044672,2022,2,5,200.0,false,'2022-06-24 14:02:58.106','2022-06-24 14:02:58.106',1122123959676928,1122123959676928,1301133418494976)
+/*& tenant:gdcd */
+/*& $replace:tenant */ ,(1269830794885120,1301133418469888,1301133309393408,1270093873017856,2022,2,5,150.0,false,'2022-06-24 14:02:58.102','2022-06-24 14:02:58.102',1122123959676928,1122123959676928,1301133418478080) ,(1269830794885120,1301133418525696,1301133309393408,1270094114659328,2022,2,5,133.7,false,'2022-06-24 14:02:58.109','2022-06-24 14:02:58.109',1122123959676928,1122123959676928,1301133418543104) ,(1269830794885120,1301133418853888,1301133309393408,1270095292462592,2022,2,5,90.0,false,'2022-06-24 14:02:58.15','2022-06-24 14:02:58.15',1122123959676928,1122123959676928,1301133418869248) ,(1269830794885120,1301133419181568,1301133309393408,1270096616395264,2022,2,5,120.0,false,'2022-06-24 14:02:58.19','2022-06-24 14:02:58.19',1122123959676928,1122123959676928,1301133419197712) ,(1269830794885120,1301133418942976,1301133309393408,1270095601381888,2022,2,5,60.0,false,'2022-06-24 14:02:58.16','2022-06-24 14:02:58.16',1122123959676928,1122123959676928,1301133418953216) ,(1269830794885120,1301133419215360,1301133309393408,1270096843611136,2022,2,5,21.0,false,'2022-06-24 14:02:58.193','2022-06-24 14:02:58.193',1122123959676928,1122123959676928,1301133419230184) ,(1269830794885120,1301133418805760,1301133309393408,1270095199228928,2022,2,5,60.0,false,'2022-06-24 14:02:58.144','2022-06-24 14:02:58.144',1122123959676928,1122123959676928,1301133418830867) ,(1269830794885120,1301133419043304,1301133309393408,1270096113769472,2022,2,5,75.0,false,'2022-06-24 14:02:58.172','2022-06-24 14:02:58.172',1122123959676928,1122123959676928,1301133419059688) ,(1269830794885120,1301133419123640,1301133309393408,1270096401422848,2022,2,5,120.0,false,'2022-06-24 14:02:58.182','2022-06-24 14:02:58.182',1122123959676928,1122123959676928,1301133419140096) ,(1269830794885120,1301133419264512,1301133309393408,null,2022,2,5,null,false,'2022-06-24 14:02:58.2','2022-06-24 14:02:58.2',1122123959676928,1122123959676928,1301133419273216) ,(1269830794885120,1301133418617856,1301133309393408,1270094470206976,2022,2,5,130.0,false,'2022-06-24 14:02:58.122','2022-06-24 14:02:58.122',1122123959676928,1122123959676928,1301133418650088) ,(1269830794885120,1301133418977256,1301133309393408,1270095701684736,2022,2,5,84.0,false,'2022-06-24 14:02:58.164','2022-06-24 14:02:58.164',1122123959676928,1122123959676928,1301133418985984) ,(1269830794885120,1301133419002368,1301133309393408,1270095948493824,2022,2,5,150.0,false,'2022-06-24 14:02:58.167','2022-06-24 14:02:58.167',1122123959676928,1122123959676928,1301133419017192) ,(1269830794885120,1301133419075560,1301133309393408,1270096208313344,2022,2,5,125.5,false,'2022-06-24 14:02:58.176','2022-06-24 14:02:58.176',1122123959676928,1122123959676928,1301133419084288) ,(1269830794885120,1301133418886144,1301133309393408,1270095381158400,2022,2,5,80.0,false,'2022-06-24 14:02:58.153','2022-06-24 14:02:58.153',1122123959676928,1122123959676928,1301133418895872) ,(1269830794885120,1301133418592768,1301133309393408,1270094365432320,2022,2,5,193.0,false,'2022-06-24 14:02:58.117','2022-06-24 14:02:58.117',1122123959676928,1122123959676928,1301133418616272) ,(1269830794885120,1301133418436096,1301133309393408,1270093449631744,2022,2,5,300.0,false,'2022-06-24 14:02:58.099','2022-06-24 14:02:58.099',1122123959676928,1122123959676928,1301133418445824) ,(1269830794885120,1301133418657280,1301133309393408,1270094568413184,2022,2,5,43.0,false,'2022-06-24 14:02:58.126','2022-06-24 14:02:58.126',1122123959676928,1122123959676928,1301133418673152) ,(1269830794885120,1301133419296256,1301133309393408,null,2022,2,5,null,false,'2022-06-24 14:02:58.204','2022-06-24 14:02:58.204',1122123959676928,1122123959676928,1301133419313128) ,(1269830794885120,1301133418779648,1301133309393408,1270095012166144,2022,2,5,121.0,false,'2022-06-24 14:02:58.14','2022-06-24 14:02:58.14',1122123959676928,1122123959676928,1301133418781696) ,(1269830794885120,1301133418707968,1301133309393408,1270094748793856,2022,2,5,70.0,false,'2022-06-24 14:02:58.133','2022-06-24 14:02:58.133',1122123959676928,1122123959676928,1301133418732520) ,(1269830794885120,1301133418557952,1301133309393408,1270094221858816,2022,2,5,68.0,false,'2022-06-24 14:02:58.113','2022-06-24 14:02:58.113',1122123959676928,1122123959676928,1301133418575802) ,(1269830794885120,1301133418689512,1301133309393408,1270094665658880,2022,2,5,107.58,false,'2022-06-24 14:02:58.129','2022-06-24 14:02:58.129',1122123959676928,1122123959676928,1301133418706432) ,(1269830794885120,1301133419337324,1301133309393408,null,2022,2,5,null,false,'2022-06-24 14:02:58.209','2022-06-24 14:02:58.209',1122123959676928,1122123959676928,1301133419353600) ,(1269830794885120,1301133419232256,1301133309393408,1270096961131008,2022,2,5,830.0,false,'2022-06-24 14:02:58.197','2022-06-24 14:02:58.197',1122123959676928,1122123959676928,1301133419254784) ,(1269830794885120,1301133418912256,1301133309393408,1270095501236224,2022,2,5,22.4,false,'2022-06-24 14:02:58.156','2022-06-24 14:02:58.156',1122123959676928,1122123959676928,1301133418919424) ,(1269830794885120,1301133418747368,1301133309393408,1270094842746368,2022,2,5,150.0,false,'2022-06-24 14:02:58.137','2022-06-24 14:02:58.137',1122123959676928,1122123959676928,1301133418763264) ,(1269830794885120,1301133419156456,1301133309393408,1270096514783744,2022,2,5,null,false,'2022-06-24 14:02:58.186','2022-06-24 14:02:58.186',1122123959676928,1122123959676928,1301133419174400)
+```
+
+SQL7:
+
+id居然也插空的
+
+```mysql
+INSERT INTO cscrc_custom.cscrc_command_week_report_construction (org_id,id,command_week_report_id,project_id,section_id,section_name,reward_punishment,progress_id,progress_name,progress_unit,design_quantity,month_plan_quantity,month_quantity,week_plan_quantity,week_quantity,total_quantity,week_plan_amount,week_amount,incomplete_reason,rectification_measures,created_at,updated_at,creator,reviser,version) VALUES (779372762624000,null,1239640054235112,null,null,null,0.0,null,null,null,0.0,0.0,0.0,0.0,0.0,0.0,0.0,0.0,null,null,'2022-06-23 20:54:56.182','2022-06-23 20:54:56.182',591141949961216,591141949961216,1300628120204800)
+/*& tenant:cscrc */
+/*& $replace:tenant */
+```
+
+SQL8：
+
+org_id非空
+
+```mysql
+/* from:'pr-service', addr:'10.180.21.130' */
+INSERT INTO  global_platform.org_relation_data(org_id, id, relation_org_id, zone_id, creator, reviser, created_at, updated_at, version) VALUES (null, 1300712188721664, 997377536790528, null, 1001595262999040, 1001595262999040, NOW(), NOW(), 1300712188721664)
 ```
 
 
