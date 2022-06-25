@@ -41,6 +41,8 @@ def get_col_default_len(col):
         return 1000
     if col == '`remark`':
         return 2000
+    if col == 'progress_name':
+        return 2000
     return 0
 
 def get_table_schema_kudu(db, table, cursor, df_columns):
