@@ -58,41 +58,10 @@ def thread_method(fn):
             has_error = True
     return fn_proxy
 
-# _tidb_engine = None
-# _tidb_engine_tiflash_only = None
-# _tidb_engine_no_auto_commit = None
-# _tidb_engine_no_auto_commit_tiflash_only = None
-# def get_tidb_conn(auto_commit=True, tiflash_only=False) -> sqlalchemy.engine.Connection:
-#     global _tidb_engine, _tidb_engine_tiflash_only, _tidb_engine_no_auto_commit, _tidb_engine_no_auto_commit_tiflash_only
-#     if _tidb_engine is None:
-#         host = conf.get('tidb', 'host')
-#         port = conf.get('tidb', 'port')
-#         user = conf.get('tidb', 'user')
-#         pwd = conf.get('tidb', 'pwd')
-#         db = conf.get('tidb', 'db')
-#         con_str = f'mysql+mysqldb://{user}:{pwd}@{host}:{port}/{db}?charset=utf8'
-#         _tidb_engine = sqlalchemy.create_engine(con_str)
-#         _tidb_engine_tiflash_only = sqlalchemy.create_engine(con_str)
-#         _tidb_engine_no_auto_commit = sqlalchemy.create_engine(con_str, pool_reset_on_return=None)
-#         _tidb_engine_no_auto_commit_tiflash_only = sqlalchemy.create_engine(con_str, pool_reset_on_return=None)
-#     if auto_commit and not tiflash_only:
-#         conn = _tidb_engine.connect()
-#     elif auto_commit and tiflash_only:
-#         conn = _tidb_engine_tiflash_only.connect()
-#         conn.execute('set @@session.tidb_isolation_read_engines = "tidb,tiflash"')
-#     elif not auto_commit and tiflash_only:
-#         conn = _tidb_engine_no_auto_commit_tiflash_only.connect()
-#         conn.execute('set autocommit=0')
-#         conn.execute('set @@session.tidb_isolation_read_engines = "tidb,tiflash"')
-#     elif not auto_commit and not tiflash_only:
-#         conn = _tidb_engine_no_auto_commit.connect()
-#         conn.execute('set autocommit=0')
-#     return conn
-
 _tidb_engine = None
-_readonly_tidb_engine = None
-def get_tidb_conn(auto_commit=True, tiflash_only=False) -> sqlalchemy.engine.Connection:
-    global _tidb_engine, _readonly_tidb_engine
+_tiflash_only_tidb_engine = None
+def get_tidb_conn(tiflash_only=False) -> sqlalchemy.engine.Connection:
+    global _tidb_engine, _tiflash_only_tidb_engine
     if _tidb_engine is None:
         host = conf.get('tidb', 'host')
         port = conf.get('tidb', 'port')
@@ -101,14 +70,12 @@ def get_tidb_conn(auto_commit=True, tiflash_only=False) -> sqlalchemy.engine.Con
         db = conf.get('tidb', 'db')
         con_str = f'mysql+mysqldb://{user}:{pwd}@{host}:{port}/{db}?charset=utf8'
         _tidb_engine = sqlalchemy.create_engine(con_str, pool_size=20, max_overflow=20)
-        # _readonly_tidb_engine = sqlalchemy.create_engine(con_str, pool_reset_on_return=None, pool_size=20, max_overflow=20)
-    conn = _tidb_engine.connect()
-    # if auto_commit:
-    #     conn = _tidb_engine.connect()
-    # else:
-    #     conn = _readonly_tidb_engine.connect()
-    #     conn.execute(f'set autocommit=0')
-    conn.execute(f'set @@session.tidb_isolation_read_engines = "{"tikv," if not tiflash_only else ""}tidb,tiflash"')
+        _tiflash_only_tidb_engine = sqlalchemy.create_engine(con_str, pool_size=10, max_overflow=20)
+    if tiflash_only:
+        conn = _tiflash_only_tidb_engine.connect()
+        conn.execute(f'set @@session.tidb_isolation_read_engines = "tidb,tiflash"')
+    else:
+        conn = _tidb_engine.connect()
     return conn
 
 def _pre_process_tidb_sql(sql):

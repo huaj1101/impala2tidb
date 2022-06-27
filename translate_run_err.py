@@ -35,7 +35,7 @@ def run_one(query_id, sql_type, catalog, tiflash_only):
     tidb_sql = response.text
     try:
         if sql_type == 'Query':
-            conn = utils.get_tidb_conn(auto_commit=False, tiflash_only=tiflash_only)
+            conn = utils.get_tidb_conn(tiflash_only=tiflash_only)
         else:
             conn = utils.get_tidb_conn()
         err_msg = ''

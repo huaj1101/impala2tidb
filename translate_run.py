@@ -154,7 +154,7 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
         duration = 0
         # logger.info(f'task_start: {task.query_id}')
         if task.sql_type == 'Query':
-            conn = utils.get_tidb_conn(auto_commit=False, tiflash_only=task.tiflash_only)
+            conn = utils.get_tidb_conn(tiflash_only=task.tiflash_only)
         else:
             conn = utils.get_tidb_conn()
         try:
