@@ -1,6 +1,24 @@
-# 因tidb的特性或bug，需要改变写法
 
-## ceiling/floor函数
+
+
+
+
+
+# 0. 测试方法
+
+由于目前还没有开放tidb的验证环境，可以用postman通过这个api来验证：
+
+http://192.168.1.146:9527/transfer-by-text?db=xxxx&tenant=xxxx&dryrun=true
+
+POST方法，body用raw直接贴impala里的SQL
+
+response的body里有会执行结果，如果有异常会给出异常信息
+
+另外关注api调用的返回时长，基本代表了sql执行的性能
+
+# 1. 因tidb的特性或bug，需要改变写法
+
+## 1.1 ceiling/floor函数
 
 感觉这属于tidb的bug，绕行
 
@@ -8,7 +26,7 @@ ceiling(omei.month/3)=stat_cycle.last_stat_quarter) 绕行写为：
 
 ceiling(0+omei.month/3)=stat_cycle.last_stat_quarter) 
 
-SQL1：
+SQL 1.1.1：
 
 ```sql
 /* from:'dp-index-service', addr:'10.180.253.170' */
@@ -170,7 +188,7 @@ group by
 /*& $replace:tenant */
 ```
 
-SQL2：
+SQL 1.1.2：
 
 ```sql
 select da.org_id as '公司id', 
@@ -195,11 +213,13 @@ select da.org_id as '公司id',
 /*& $replace:tenant */
 ```
 
-## 常量列导致的问题
+## 1.2 常量列导致的问题
 
 貌似是union的两个部分里有limit，外面再加一个常量列app_origin，触发了tidb的bug
 
 把常量列改写到union的各个部分里即可
+
+SQL 1.2.1
 
 ```sql
 /* from:'node-mb2-public-data-service', addr:'10.180.88.155' */
@@ -228,7 +248,7 @@ select *, 0 app_origin from (
         limit 20
 ```
 
-## with语句块
+## 1.3 with语句块
 
 with子句，在impala里是语法糖，运行时会嵌入到主SQL中
 
@@ -242,9 +262,11 @@ with子句，在impala里是语法糖，运行时会嵌入到主SQL中
 
 以下是搜到的需要改的SQL
 
-SQL1：
+SQL 1.3.1：
 
 把orgs嵌入到dosage语句块，不然会把q_dosage符合条件的结果都取到内存中再与cte去join，几千万条
+
+嵌入之后会发现依然慢，先不用管，这是其他问题，这一波不解决
 
 ```sql
 /* from:'node-ca-concrete-service', addr:'10.180.38.176' */
@@ -280,9 +302,9 @@ with orgs as ( -- pc门户--类别汇总应耗实耗
           order by category_id
 ```
 
-SQL2：
+SQL 1.3.2：
 
-同SQL1
+同SQL 1.3.1
 
 ```mysql
 /* from:'node-ca-concrete-service', addr:'10.180.38.133' */
@@ -342,7 +364,11 @@ with orgs as (select child_org_id from global_platform.org_relation where org_id
         order by category_id
 ```
 
-SQL3：
+SQL 1.3.3：
+
+把orgs、produceTmp两个CTE展开到使用的地方，能快一大半，但是依然要3秒多
+
+这个SQL比较复杂，数据量也大，格式也乱，没细看还能不能优化
 
 ```sql
 /* from:'node-mp-common-service', addr:'10.180.38.136' */
@@ -350,14 +376,18 @@ WITH orgs AS(SELECT child_org_id FROM global_platform.org_relation WHERE org_id 
     
 ```
 
-SQL4:
+SQL 1.3.4:
+
+同1.3.3
 
 ```sql
 /* from:'node-mp-common-service', addr:'10.180.21.157' */
 select temp_a.material,temp_a.mater_info from ( WITH orgs AS(SELECT child_org_id FROM global_platform.org_relation WHERE org_id = 1012251829238272  AND child_type = 'project'),produceTmp AS(SELECT org_id,dat_tim,schedule_id,labour_name,vehicle,car_amnt,trans_mete,material_unit,reciepe_no,bet_lev,material_name,material_model,pro_line,operator,customer,project_name,cons_pos,station,concat(isnull(material_name,''),' | ',isnull(material_model,'')) AS mater_info FROM q_produce WHERE org_id in(SELECT child_org_id FROM orgs) AND is_removed = FALSE   and dat_tim between '2018-01-01 00:00:00'  and '2022-05-18 19:10:36' ),produceData AS(SELECT sum(b.plan_amn)plan_amn,sum(b.fact_amnt)fact_amnt,a.pro_line,a.schedule_id,a.org_id,b.material,concat(isnull(b.material_name,''),' | ',isnull(b.material_model,'')) AS mater_info FROM produceTmp as a LEFT JOIN q_dosage b ON b.org_id = a.org_id AND a.pro_line = b.pro_line AND a.schedule_id = b.schedule_id GROUP BY mater_info,a.pro_line,a.schedule_id,a.org_id,material),supplementTmp AS ( SELECT a.id,cast(a.id as string) as schedule_id,a.org_id,dat_tim,vehicle,CAST(isnull(prod_mete,0) AS decimal(28,3)) car_amnt,isnull(labour_name,'')                      labour_name,CAST(isnull(prod_mete,0) AS decimal(28,3)) trans_mete,pro_line,reciepe_no,bet_lev,'' customer,''project_name,a.auditor  AS                                  operator,cons_pos,a.org_name AS                                  station,a.material_name,a.material_unit,a.material_model,concat(isnull(material_name,''),' | ',isnull(material_model,'')) AS mater_info FROM q_manual_supplement as a  WHERE a.org_id IN (SELECT child_org_id FROM orgs) AND a.is_audit = TRUE AND a.is_removed = FALSE AND a.is_productionsystem = TRUE   and dat_tim between '2018-01-01 00:00:00'  and '2022-05-18 19:10:36'  ),supplementData AS (SELECT a.dat_tim,cast(a.id as string) as schedule_id,a.org_id,a.vehicle,a.car_amnt,a.labour_name,a.trans_mete,a.pro_line,'' material_unit,a.reciepe_no,a.bet_lev,'' material_name,'' material_model,a.operator,'' customer,'' project_name,a.cons_pos,a.station,'' material,concat(isnull(b.material_name,''),isnull(b.material_model,'')) AS mater_info,CAST(isnull(b.fact_amnt,0) AS decimal(28,3))plan_amn,CAST(isnull(b.fact_amnt,0) AS decimal(28,3))fact_amnt FROM supplementTmp AS a INNER JOIN q_manual_supplement_item AS b ON a.id = b.order_id AND a.org_id = b.org_id AND b.is_removed = FALSE),itemsData as(select plan_amn,fact_amnt,mater_info,pro_line,org_id,schedule_id,material from produceData union all select plan_amn,fact_amnt,mater_info,pro_line,org_id,schedule_id,material from supplementData),allData as(select org_id,dat_tim,schedule_id,mater_info,labour_name,vehicle,car_amnt,trans_mete,material_unit,reciepe_no,bet_lev,material_name,material_model,pro_line,operator,customer,project_name,cons_pos,station from produceTmp union all select org_id,dat_tim,schedule_id,mater_info,labour_name,vehicle,car_amnt,trans_mete,material_unit,reciepe_no,bet_lev,material_name,material_model,pro_line,operator,customer,project_name,cons_pos,station from supplementTmp),A as(select  pro_line,org_id,schedule_id,material,mater_info,sum(plan_amn) plan_amn,sum(fact_amnt) fact_amnt from itemsData GROUP BY pro_line,org_id,schedule_id,material,mater_info)select B.dat_tim,B.labour_name,B.vehicle,B.car_amnt,B.trans_mete,B.material_unit,B.reciepe_no,B.bet_lev,B.material_name,B.material_model,B.operator,B.customer,B.project_name,B.cons_pos,B.station,A.* from A as A left join allData as B on A.pro_line = B.pro_line and A.org_id=B.org_id and A.schedule_id = B.schedule_id  order by B.dat_tim desc limit 1000000 offset 0 ) as temp_a group by temp_a.material,temp_a.mater_info order by temp_a.material,temp_a.mater_info desc
 ```
 
-SQL5:
+SQL 1.3.5:
+
+orgs 嵌入 productData
 
 ```sql
 /* from:'node-ca-concrete-service', addr:'10.180.38.176' */
@@ -424,7 +454,7 @@ with orgs as ( -- 实际,标准,偏差
         select * from result order by material_name
 ```
 
-SQL6：
+SQL 1.3.6：
 
 s_material嵌入dosage语句块，避免把几千万条数据从q_dosage取出来
 
@@ -620,9 +650,9 @@ with
 
 
 
-## cast返回结果不同
+## 1.4 cast返回结果不同
 
-SQL1：
+SQL 1.4.1：
 
 cast(str as double) ，在impala里返回null，在tidb里返回0，而且在有的场景下，会报错
 
@@ -677,11 +707,11 @@ AND cast(pewp.property_value as double) is not null
          AND ppq.parent_id = -1
 ```
 
-## 性能问题
+## 1.5 性能问题
 
 有一些sql，在tidb中执行计划有毛病，需要做一些改写
 
-SQL1：
+SQL 1.5.1：
 
 这个SQL写的确实不够合理，impala能处理好，tidb执行就很慢，这里：
 
@@ -739,7 +769,7 @@ WHERE pbqd.is_removed = false
 ORDER BY pbqd.level, pbqd.order_no
 ```
 
-SQL2:
+SQL 1.5.2:
 
 这段SQL写的逻辑混乱，导致执行计划乱七八糟
 
@@ -763,7 +793,7 @@ with qLabourAllot as (
                 order by a.sort_code
 ```
 
-SQL3
+SQL 1.5.3
 
 这个跟SQL2问题一样，应该是拷贝的
 
@@ -782,7 +812,7 @@ with delivery as (
                 order by a.sort_code
 ```
 
-SQL4:
+SQL 1.5.4:
 
 这个SQL写的本身没毛病，但是很依赖引擎的优化能力
 
@@ -858,7 +888,7 @@ order by
 ;
 ```
 
-SQL5:
+SQL 1.5.5:
 
 d_date表数据量很大，join的时候加上org_id的关联条件
 
@@ -935,11 +965,13 @@ order by   temp.stat_date desc
 /*& $replace:tenant */
 ```
 
-SQL6：
+SQL 1.5.6：
 
 tidb对这个SQL优化的不好，扫描记录数太多
 
-在最后加个条件缩小表范围 where __t.org_id in (612846781755491)
+在project_quantity_formula上补条件使能命中主键索引：
+
+where \_\_t.org_id in (612846781755491) and \_\_t.id in (1786706395246, 1786706395248, ......)
 
 ```mysql
 /* from:'iquantity-jit-stats-service', addr:'10.180.12.148' */
@@ -950,33 +982,50 @@ INNER JOIN (
 VALUES (1786706395246 AS `id`, 612846781755491 AS `org_id`, '41.76 * 1' AS `result_formula`),
 (1786706395248, 612846781755491, '3.1 * 8 * 41 / 40'),
 (1786706395252, 612846781755491, '41.76 * 1'),
-(1786706395257, 612846781755491, '41.76 * 1'),
-(1786706395258, 612846781755491, '3 * 8 * 1'),
-(1786706395262, 612846781755491, '41.76 * 1'),
-(1786706395267, 612846781755491, '41.76 * 1'),
-(1786706395268, 612846781755491, '3 * 8 * 1'),
-(1786706395272, 612846781755491, '41.76 * 1'),
-(1786706395278, 612846781755491, '41.76 * 1'),
-(1786706395279, 612846781755491, '3 * 8 * 1'),
-(1786706395283, 612846781755491, '41.76 * 1'),
-(1786706395288, 612846781755491, '41.76 * 1'),
-(1786706395289, 612846781755491, '3 * 1 * 8'),
-(1786706395293, 612846781755491, '41.76 * 1'),
+...
 (1786706395298, 612846781755491, '41.76 * 1'),
 (1786706395299, 612846781755491, '3 * 8 * 1'),
 (1786706395303, 612846781755491, '41.76 * 1')
 ) AS __tmp ON __t.`id`=__tmp.`id` AND __t.`org_id`=__tmp.`org_id`
 ```
 
+SQL 1.5.7:
+
+同上
+
+```mysql
+UPDATE __t
+SET __t.`guid` = __tmp.`guid`, __t.`project_unit_work_id` = __tmp.`project_unit_work_id`, __t.`project_quantity_id` = __tmp.`project_quantity_id`, 
+  __t.`name` = __tmp.`name`, __t.`unit` = __tmp.`unit`, __t.`order_no` = __tmp.`order_no`, __t.`formula` = __tmp.`formula`, __t.`digit` = __tmp.`digit`, 
+  __t.`result` = __tmp.`result`, __t.`result_formula` = __tmp.`result_formula`, __t.`is_result` = __tmp.`is_result`, __t.`remark` = __tmp.`remark`, 
+  __t.`creator` = __tmp.`creator`, __t.`reviser` = __tmp.`reviser`, __t.`version` = __tmp.`version`, __t.`updated_at` = __tmp.`updated_at`
+FROM
+  global_cq3.project_quantity_formula AS __t
+  INNER JOIN (
+      VALUES
+        (
+          1204793257497600 AS `org_id`, 1301767944615425 AS `id`, 'c7e36ab83a544aaf99b6e11f41d5fcfd' AS `guid`, 1301701571632080 AS `project_unit_work_id`, 1301767943896065 AS `project_quantity_id`, '#L1' AS `name`, null AS `unit`, 1 AS `order_no`, '1179' AS `formula`, 'double3' AS `digit`, 1179 AS `result`, '1179' AS `result_formula`, true AS `is_result`, null AS `remark`, 809443201651152 AS `creator`, 809443201651152 AS `reviser`, 1301796509127680 AS `version`, '2022-06-25 12:32:01.787000' AS `updated_at`
+        ),  
+        ......
+        (
+          1204793257497600, 1301767944615439, '9b2fcb3f614d4c7d9589f89f6ed976f5', 1301701571632080, 1301767943896079, '#L1', null, 1, '20', 'double3', 20, '20', true, null, 809443201651152, 809443201651152, 1301796509127680, '2022-06-25 12:32:01.787000'
+        )
+      ) AS __tmp
+      ON __t.`org_id` = __tmp.`org_id`
+      AND __t.`id` = __tmp.`id`
+```
 
 
-# SQL语法错误
+
+# 2. SQL语法错误
 
 impala语法检查相当宽松，有一些SQL写的不太妥当，在impala里能执行（但可能是隐藏的bug），在tidb里会报错
 
-## 没有limit有offset
+## 2.1 没有limit有offset
 
 去掉offset
+
+SQL 2.1.1
 
 ```mysql
 /* from:'node-mq2-rds-service', addr:'10.180.137.1' */
@@ -986,11 +1035,11 @@ WHERE `qCheckStoreItem`.`org_id` = 1229202466600936 AND `qCheckStoreItem`.`order
 OFFSET 0;
 ```
 
-## 没有聚合函数写了group
+## 2.2 没有聚合函数写了group
 
 没看懂group的意义何在，如果是要去重复记录用distinct
 
-SQL1：
+SQL 2.2.1：
 
 ```sql
 /* from:'node-ca-concrete-service', addr:'10.180.38.176' */
@@ -1024,9 +1073,9 @@ with lopsum as
     select * from dtcoltable order by material
 ```
 
-SQL2：
+SQL 2.2.2：
 
-这个SQL跟SQL1看起来一样，但是服务名变化了
+这个SQL跟SQL 2.2.1看起来一样，但是服务名变化了
 
 ```mysql
 /* from:'node-ca2-report-service', addr:'10.180.180.214' */
@@ -1062,11 +1111,11 @@ with lopsum as
 
 
 
-## 没有group写了having
+## 2.3 没有group写了having
 
 没有group写什么having，用where不香吗
 
-SQL1:
+SQL 2.3.1:
 
 ```sql
 /* from:'node-mq2-module-custom-service', addr:'10.180.37.3' */
@@ -1124,7 +1173,7 @@ with orgs as(
                 order by a.need_quantity desc
 ```
 
-SQL2:
+SQL 2.3.2:
 
 ```mysql
 /* from:'sc-api-service', addr:'10.180.59.153' */
@@ -1199,7 +1248,7 @@ WHERE
 HAVING ssvi.quantity-ssvi.monthly_quantity <> 0
 ```
 
-SQL3：
+SQL 2.3.3：
 
 ```mysql
 /* from:'node-mq2-plan-service', addr:'10.180.38.126' */
@@ -1257,7 +1306,7 @@ with orgs as(
 
 
 
-## group by的内容跟select里的内容对不上
+## 2.4 group by的内容跟select里的内容对不上
 
 impala对group by字段的处理十分的宽泛，很多SQL在tidb里跑不过
 
@@ -1265,7 +1314,7 @@ group by中应包含所有非聚合字段，对于select中时表达式的，要
 
 对于比较复杂的表达式，可能照抄都不对（跟tidb内部处理机制有关，没细研究），这种建议按更清晰的方式处理，要么把表达式计算放入一个子查询，要么先group完，再去join其他表计算关联字段
 
-SQL1
+SQL 2.4.1
 
 ```sql
 /* from:'node-ca-concrete-service', addr:'10.180.38.176' */
@@ -1279,7 +1328,7 @@ with lopsum as
     select * from lopsum order by col_name
 ```
 
-SQL2
+SQL 2.4.2
 
 ```mysql
 /* from:'node-ca2-report-service', addr:'10.180.180.214' */
@@ -1293,7 +1342,7 @@ with lopsum as
     select * from lopsum order by col_name
 ```
 
-SQL3
+SQL 2.4.3
 
 ```sql
 select 
@@ -1382,7 +1431,7 @@ order by
 /*& $replace:tenant */
 ```
 
-SQL4：
+SQL 2.4.4：
 
 这个SQL有些奇怪，可能触发了tidb的bug，需要这么改写才能通过
 
@@ -1450,7 +1499,7 @@ group by pro.org_id,year(pro.contract_sign_date)
 /*& $replace:tenant */
 ```
 
-SQL5：
+SQL 2.4.5：
 
 这个SQL group by里的表达式和select里对不上
 
@@ -1572,7 +1621,7 @@ group by
 /*& $replace:tenant */
 ```
 
-SQL6:
+SQL 2.4.6:
 
 同上
 
@@ -1641,9 +1690,9 @@ group by
 
 
 
-## 表别名不存在
+## 2.5 表别名不存在
 
-SQL1
+SQL 2.5.1
 
 f.update_at = now()，没有别名为f的表
 
@@ -1683,7 +1732,7 @@ WHERE p.is_removed = FALSE AND p.param_type <> 'feature'
   AND p.org_id = 1059206399841280
 ```
 
-SQL2:
+SQL 2.5.2:
 
 q.reviser=901982285443072 没有别名q
 
@@ -1699,13 +1748,13 @@ update cq_command_bill_quantity_split
         AND org_id IN (779552988099584)
 ```
 
-## 非空字段插入了空值
+## 2.6 非空字段插入了空值
 
 impala的处理很宽松，违反空值约束不会报错，只会有一句提示，程序中没处理
 
 但是违反空值约束是插不进去的，属于比较严重的bug，不知道为啥业务上没发现
 
-SQL1：
+SQL 2.6.1：
 
 code是非空字段
 
@@ -1714,7 +1763,7 @@ code是非空字段
 INSERT INTO `material` (`org_id`,`id`,`material_category_id`,`code`,`full_code`,`name`,`model`,`spec`,`unit`,`is_expired`,`is_removed`,`created_at`,`updated_at`,`version`,`is_approve`,`category_approve`,`integration_id`,`match_state`,`approve_state`) VALUES (737647887905281,1275397092061696,1026568914284598,NULL,NULL,NULL,NULL,NULL,NULL,false,false,'2022-05-19 05:22:16.698000','2022-05-19 05:22:16.697000',1275397092061696,false,false,'8a8a8ae57ca2f848017ca6a124a430a9',1,0),(737647887905281,1275397092061697,1026568914284598,NULL,NULL,NULL,NULL,NULL,NULL,false,false,'2022-05-19 05:22:16.699000','2022-05-19 05:22:16.697000',1275397092061697,false,false,'8a8a8ae57ca2f848017ca6a124a430ab',1,0),(737647887905281,1275397092061698,1026568914284598,NULL,NULL,NULL,NULL,NULL,NULL,false,false,'2022-05-19 05:22:16.699000','2022-05-19 05:22:16.697000',1275397092061698,false,false,'8a8a8ae57ca2f848017ca6a124a430ae',1,0);
 ```
 
-SQL2:
+SQL 2.6.2:
 
 name是非空字段
 
@@ -1724,7 +1773,7 @@ INSERT INTO gdcd_custom.gdcd_year_node_detail (org_id,id,year_node_id,node_id,na
 /*& $replace:tenant */
 ```
 
-SQL3:
+SQL 2.6.3:
 
 period_plan_detail_id 是非空字段
 
@@ -1735,7 +1784,7 @@ INSERT INTO cr9g_custom.cr9g_project_period_progress_detail (org_id,id,period_pr
 ......
 ```
 
-SQL4:
+SQL 2.6.4:
 
 is_removed 是非空字段
 
@@ -1745,7 +1794,7 @@ INSERT INTO `q_receive_more_material` (`id`,`org_id`,`order_id`,`service_type`,`
 
 ```
 
-SQL5:
+SQL 2.6.5:
 
 project_id 是非空字段
 
@@ -1755,7 +1804,7 @@ INSERT INTO gxlq_custom.gxlq_group_issued_quarter_plan_detail (org_id,id,project
 /*& $replace:tenant */
 ```
 
-SQL6:
+SQL 2.6.6:
 
 project_id 是非空字段
 
@@ -1765,7 +1814,7 @@ INSERT INTO gxlq_custom.gxlq_company_reported_quarter_plan_detail (org_id,id,pro
 /*& $replace:tenant */
 ```
 
-SQL6:
+SQL 2.6.7:
 
 project_id是非空字段
 
@@ -1775,7 +1824,7 @@ INSERT INTO gdcd_custom.gdcd_company_quarter_plan_detail (org_id,id,quarter_plan
 /*& $replace:tenant */ ,(1269830794885120,1301133418469888,1301133309393408,1270093873017856,2022,2,5,150.0,false,'2022-06-24 14:02:58.102','2022-06-24 14:02:58.102',1122123959676928,1122123959676928,1301133418478080) ,(1269830794885120,1301133418525696,1301133309393408,1270094114659328,2022,2,5,133.7,false,'2022-06-24 14:02:58.109','2022-06-24 14:02:58.109',1122123959676928,1122123959676928,1301133418543104) ,(1269830794885120,1301133418853888,1301133309393408,1270095292462592,2022,2,5,90.0,false,'2022-06-24 14:02:58.15','2022-06-24 14:02:58.15',1122123959676928,1122123959676928,1301133418869248) ,(1269830794885120,1301133419181568,1301133309393408,1270096616395264,2022,2,5,120.0,false,'2022-06-24 14:02:58.19','2022-06-24 14:02:58.19',1122123959676928,1122123959676928,1301133419197712) ,(1269830794885120,1301133418942976,1301133309393408,1270095601381888,2022,2,5,60.0,false,'2022-06-24 14:02:58.16','2022-06-24 14:02:58.16',1122123959676928,1122123959676928,1301133418953216) ,(1269830794885120,1301133419215360,1301133309393408,1270096843611136,2022,2,5,21.0,false,'2022-06-24 14:02:58.193','2022-06-24 14:02:58.193',1122123959676928,1122123959676928,1301133419230184) ,(1269830794885120,1301133418805760,1301133309393408,1270095199228928,2022,2,5,60.0,false,'2022-06-24 14:02:58.144','2022-06-24 14:02:58.144',1122123959676928,1122123959676928,1301133418830867) ,(1269830794885120,1301133419043304,1301133309393408,1270096113769472,2022,2,5,75.0,false,'2022-06-24 14:02:58.172','2022-06-24 14:02:58.172',1122123959676928,1122123959676928,1301133419059688) ,(1269830794885120,1301133419123640,1301133309393408,1270096401422848,2022,2,5,120.0,false,'2022-06-24 14:02:58.182','2022-06-24 14:02:58.182',1122123959676928,1122123959676928,1301133419140096) ,(1269830794885120,1301133419264512,1301133309393408,null,2022,2,5,null,false,'2022-06-24 14:02:58.2','2022-06-24 14:02:58.2',1122123959676928,1122123959676928,1301133419273216) ,(1269830794885120,1301133418617856,1301133309393408,1270094470206976,2022,2,5,130.0,false,'2022-06-24 14:02:58.122','2022-06-24 14:02:58.122',1122123959676928,1122123959676928,1301133418650088) ,(1269830794885120,1301133418977256,1301133309393408,1270095701684736,2022,2,5,84.0,false,'2022-06-24 14:02:58.164','2022-06-24 14:02:58.164',1122123959676928,1122123959676928,1301133418985984) ,(1269830794885120,1301133419002368,1301133309393408,1270095948493824,2022,2,5,150.0,false,'2022-06-24 14:02:58.167','2022-06-24 14:02:58.167',1122123959676928,1122123959676928,1301133419017192) ,(1269830794885120,1301133419075560,1301133309393408,1270096208313344,2022,2,5,125.5,false,'2022-06-24 14:02:58.176','2022-06-24 14:02:58.176',1122123959676928,1122123959676928,1301133419084288) ,(1269830794885120,1301133418886144,1301133309393408,1270095381158400,2022,2,5,80.0,false,'2022-06-24 14:02:58.153','2022-06-24 14:02:58.153',1122123959676928,1122123959676928,1301133418895872) ,(1269830794885120,1301133418592768,1301133309393408,1270094365432320,2022,2,5,193.0,false,'2022-06-24 14:02:58.117','2022-06-24 14:02:58.117',1122123959676928,1122123959676928,1301133418616272) ,(1269830794885120,1301133418436096,1301133309393408,1270093449631744,2022,2,5,300.0,false,'2022-06-24 14:02:58.099','2022-06-24 14:02:58.099',1122123959676928,1122123959676928,1301133418445824) ,(1269830794885120,1301133418657280,1301133309393408,1270094568413184,2022,2,5,43.0,false,'2022-06-24 14:02:58.126','2022-06-24 14:02:58.126',1122123959676928,1122123959676928,1301133418673152) ,(1269830794885120,1301133419296256,1301133309393408,null,2022,2,5,null,false,'2022-06-24 14:02:58.204','2022-06-24 14:02:58.204',1122123959676928,1122123959676928,1301133419313128) ,(1269830794885120,1301133418779648,1301133309393408,1270095012166144,2022,2,5,121.0,false,'2022-06-24 14:02:58.14','2022-06-24 14:02:58.14',1122123959676928,1122123959676928,1301133418781696) ,(1269830794885120,1301133418707968,1301133309393408,1270094748793856,2022,2,5,70.0,false,'2022-06-24 14:02:58.133','2022-06-24 14:02:58.133',1122123959676928,1122123959676928,1301133418732520) ,(1269830794885120,1301133418557952,1301133309393408,1270094221858816,2022,2,5,68.0,false,'2022-06-24 14:02:58.113','2022-06-24 14:02:58.113',1122123959676928,1122123959676928,1301133418575802) ,(1269830794885120,1301133418689512,1301133309393408,1270094665658880,2022,2,5,107.58,false,'2022-06-24 14:02:58.129','2022-06-24 14:02:58.129',1122123959676928,1122123959676928,1301133418706432) ,(1269830794885120,1301133419337324,1301133309393408,null,2022,2,5,null,false,'2022-06-24 14:02:58.209','2022-06-24 14:02:58.209',1122123959676928,1122123959676928,1301133419353600) ,(1269830794885120,1301133419232256,1301133309393408,1270096961131008,2022,2,5,830.0,false,'2022-06-24 14:02:58.197','2022-06-24 14:02:58.197',1122123959676928,1122123959676928,1301133419254784) ,(1269830794885120,1301133418912256,1301133309393408,1270095501236224,2022,2,5,22.4,false,'2022-06-24 14:02:58.156','2022-06-24 14:02:58.156',1122123959676928,1122123959676928,1301133418919424) ,(1269830794885120,1301133418747368,1301133309393408,1270094842746368,2022,2,5,150.0,false,'2022-06-24 14:02:58.137','2022-06-24 14:02:58.137',1122123959676928,1122123959676928,1301133418763264) ,(1269830794885120,1301133419156456,1301133309393408,1270096514783744,2022,2,5,null,false,'2022-06-24 14:02:58.186','2022-06-24 14:02:58.186',1122123959676928,1122123959676928,1301133419174400)
 ```
 
-SQL7:
+SQL 2.6.8:
 
 id居然也插空的
 
@@ -1785,7 +1834,7 @@ INSERT INTO cscrc_custom.cscrc_command_week_report_construction (org_id,id,comma
 /*& $replace:tenant */
 ```
 
-SQL8：
+SQL 2.6.9：
 
 org_id非空
 
@@ -1796,13 +1845,13 @@ INSERT INTO  global_platform.org_relation_data(org_id, id, relation_org_id, zone
 
 
 
-## 错误的日期格式
+## 2.7 错误的日期格式
 
 impala里，无论什么样的字符串，都能插入到日期字段，只不过不合规范的会插入为null
 
 tidb里不合规范的格式会报错
 
-SQL1:
+SQL 2.7.1:
 
 出现了这样的日期字符串：'133406-03-22 00:00:00'，还发现过这样的：'NaN-aN-aN aN:aN:aN'
 
@@ -1819,16 +1868,16 @@ UPDATE project_plan_detail SET stat_actual_start_date=CASE id WHEN 1179989213982
 1179989213982906, 1179989213982904, 1179989213982918)
 ```
 
-SQL2:
+SQL 2.7.2:
 
-出现了这样的日期字符串：'133406-03-21 00:00:00'
+出现了这样的日期字符串：'133406-03-21 00:00:00' 或 'NaN-aN-aN aN:aN:aN'
 
 ```sql
 /* from:'itask-service-v2', addr:'10.180.88.164' */
 UPDATE project_plan SET stat_actual_start_date=CASE id WHEN 1165272956449792 THEN '2021-11-20 00:00:00' WHEN 1179989213982720 THEN '2021-11-20 00:00:00' ELSE stat_actual_start_date END, stat_actual_end_date=CASE id WHEN 1165272956449792 THEN null WHEN 1179989213982720 THEN null ELSE stat_actual_end_date END, stat_est_end_date=CASE id WHEN 1165272956449792 THEN '133406-03-21 00:00:00' WHEN 1179989213982720 THEN '133406-03-21 00:00:00' ELSE stat_est_end_date END, version=1274858129683456, reviser=1155342276554752, updated_at=NOW() WHERE  id IN (1165272956449792, 1179989213982720)
 ```
 
-SQL3:
+SQL 2.7.3:
 
 这种不是标准的默认时间格式 '8-5-20'，impala里也插不进去，只不过不报错
 
@@ -1837,7 +1886,7 @@ SQL3:
 UPSERT INTO manage_person_roster (excel_task_id, org_id, id, version, creator, reviser, created_at, updated_at, name, sex, post, phone_number, in_date, out_date, remark) VALUES('excel:iquantity:import:10021:1270106435376128:1652841182473', 1270094665658880, 1274842050731496, 1274842050780160, 1270106435376128, 1270106435376128, NOW(), NOW(), '彭良辉', '男', '项目总工', '{crypto}kOZjZjWCy3ZW3b+xBemI3Q==', '8-5-20', null, null),('excel:iquantity:import:10021:1270106435376128:1652841182473', 1270094665658880, 1274842050731497, 1274842050780161, 1270106435376128, 1270106435376128, NOW(), NOW(), '麦俊辉', '男', '机材主管', '{crypto}hL5rAd7Q9pE73cGVV/s3bA==', '5-1-15', null, null),('excel:iquantity:import:10021:1270106435376128:1652841182473', 1270094665658880, 1274842050731498, 1274842050780162, 1270106435376128, 1270106435376128, NOW(), NOW(), '赖水源', '男', '中队长/兼后勤', '{crypto}T2X5X3ClbMQtZsZ0HbhUcg==', '3-6-16', null, null),('excel:iquantity:import:10021:1270106435376128:1652841182473', 1270094665658880, 1274842050731499, 1274842050780163, 1270106435376128, 1270106435376128, NOW(), NOW(), '李赞莲', '女', '经营主管', '{crypto}ld2N1Of8fE5qNaIlEwk9hQ==', '4-21-18', null, null),('excel:iquantity:import:10021:1270106435376128:1652841182473', 1270094665658880, 1274842050731500, 1274842050780164, 1270106435376128, 1270106435376128, NOW(), NOW(), '王小辉', '男', '施工员', '{crypto}Il2UJX+2hCwkBk+7tkK/Qw==', '3-10-19', null, null),('excel:iquantity:import:10021:1270106435376128:1652841182473', 1270094665658880, 1274842050731501, 1274842050780165, 1270106435376128, 1270106435376128, NOW(), NOW(), '蒋诚', '男', '施工员', '{crypto}Xwniv1d7fgkMC0Abo+iivQ==', '8-3-21', null, null),('excel:iquantity:import:10021:1270106435376128:1652841182473', 1270094665658880, 1274842050731502, 1274842050780166, 1270106435376128, 1270106435376128, NOW(), NOW(), '唐文正', '男', '机材管理员', '{crypto}5jnbNj+Go0DVsTiIGIQD1g==', '8-3-21', null, null),('excel:iquantity:import:10021:1270106435376128:1652841182473', 1270094665658880, 1274842050731503, 1274842050780167, 1270106435376128, 1270106435376128, NOW(), NOW(), '陈加耀', '男', '经营管理员', '{crypto}GjjjQgLOcH8o/JJn1BY++w==', '8-3-21', null, null)
 ```
 
-SQL4:
+SQL 2.7.4:
 
 出现了这样的日期字符串：'Invalid date'
 
@@ -1846,7 +1895,7 @@ SQL4:
 INSERT INTO `q_delivery_more_material` (`id`,`org_id`,`order_id`,`service_type`,`order_type`,`material_id`,`material_code`,`material_name`,`material_model`,`material_unit`,`item_bar_code`,`auxiliary_unit`,`net_quantity`,`conversion_rate`,`is_red`,`sort_code`,`is_accounted`,`ori_material_id`,`ori_item_id`,`ori_order_id`,`is_removed`,`creator_name`,`created_at`,`updated_at`,`version`,`submit_date`,`receive_price`) VALUES (3748,998971519127552,1274801050163200,10,4,1027455049306194,'00001294087','混凝土','C15','立方米','','立方米',6.36,1,false,0,false,'1099000000001294087','L122-00360-A0006','L122-00360-A0006',false,'靳艾萍','Invalid date','2022-05-18 09:09:37.711000',3748,'2022-05-18',0);
 ```
 
-SQL5:
+SQL 2.7.5:
 
 这种不是标准的默认时间格式'10-1-81'，impala里也插不进去，只不过不报错
 
@@ -1857,7 +1906,7 @@ UPSERT INTO hr_employee_attendance (excel_task_id, org_id, id, version, creator,
 ('excel:iquantity:import:10051:816870672258536:1652867883569', 1175208257327104, 1275060820497441, 1275060820497441, 816870672258536, 816870672258536, NOW(), NOW(), 2022, 1, '临时用工', '机电部', '王志辉', '411202197404284015', '电工', '其他人员', null, '2021-12-7', null, null, null, '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', '出勤', null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null)
 ```
 
-SQL6:
+SQL 2.7.6:
 
 出现了这样的日期字符串：'Invalid date'
 
@@ -1866,7 +1915,7 @@ SQL6:
 INSERT INTO `q_mapping_materials_detail` (`org_id`,`id`,`org_name`,`material`,`pro_line`,`material_id`,`material_code`,`material_name`,`material_model`,`material_unit`,`auxiliary_unit`,`conversion_rate`,`is_matching`,`begin_date`,`end_date`,`first_extract_time`,`ori_material_id`,`sort_code`,`creator_id`,`creator_name`,`created_at`,`modifier_id`,`modifier_name`,`updated_at`,`version`) VALUES (1012251829238272,1275095292318648,'预制构件项目部','水泥1','Z1',1027455049379903,'00001293881','普通硅酸盐水泥','P · O 42.5 散装','吨','吨',1,false,'2016-05-01 19:08:04','2022-05-18 19:08:04','Invalid date','1099000000001293881',2,961627853945344,'李志成','2022-05-18 19:08:15.938000',961627853945344,'李志成','2022-05-18 19:08:15.939000',1275095292318648);
 ```
 
-SQL7:
+SQL 2.7.7:
 
 出现了这样的日期字符串：'2013-7-1O'
 
@@ -1880,7 +1929,7 @@ INSERT INTO hr_project_month_job (excel_task_id, org_id, id, version, creator, r
     
 ```
 
-SQL8:
+SQL 2.7.8:
 
 出现了这样的日期字符串：'6-30-07'
 
@@ -1889,7 +1938,7 @@ SQL8:
 UPSERT INTO hr_strength_employee (excel_task_id, org_id, id, version, creator, reviser, created_at, updated_at, year, month, employment_nature, department, person_name, person_id, post, person_class, job_title, job_title_level, job_title_start_time, sal_level, actual_send_total, should_send_total, deduction_total, project_stimulate, endowment_insurance, unemployment_insurance, medical_insurance, housing_provident_fund, employment_injury_insurance, month_bonus, remark) VALUES('excel:iquantity:import:10051:768982698176512:1653881155615', 759005196121088, 1283361557517312, 1283361557517312, 768982698176512, 768982698176512, NOW(), NOW(), 2022, 4, '实力员工', '项目领导', '吴罡令', '500237198403028939', '常务副经理（主持工作）兼任党工委副书记', '管理人员', '工程师', '中级', '6-30-07', '16-3', 8455.45, 11747, 3291.55, 2132, 1103.2, 41.37, 275.8, 1654.8, 172.38, 0, null),('excel:iquantity:import:10051:768982698176512:1653881155615', 759005196121088, 1283361557517313, 1283361557517313, 768982698176512, 768982698176512, NOW(), NOW(), 2022, 4, '实力员工', '财务部', '刘艳琴', '130103198011130020', '部长', '管理人员', '助理会计师', '助理级', '#REF!', '18-5', 7890.46, 10633, 2742.54, 1540, 918.4, 34.44, 229.6, 1377.6, 143.5, 0, null),('excel:iquantity:import:10051:768982698176512:1653881155615', 759005196121088, 1283361557517314, 1283361557517314, 768982698176512, 768982698176512, NOW(), NOW(), 2022, 4, null, null, null, null, null, null, null, null, null, null, null, null, null, 0, null, null, null, null, null, 0, null)
 ```
 
-SQL9:
+SQL 2.7.9:
 
 出现了这样的日期字符串：'Invalid date'
 
@@ -1898,7 +1947,7 @@ SQL9:
 UPDATE `project_work_deadline` SET `parent_id`=1066046439330816,`name`='武家塬隧道1#斜井大里程',`node_type`='controlDate',`plan_start_date`=null,`plan_end_date`='2023-12-23 00:00:00.000000',`adjustment_start_date`='Invalid date',`adjustment_end_date`='2023-12-23 00:00:00.000000',`adjustment_version`=0,`duration`=null,`actual_start_date`=null,`actual_end_date`=null,`full_id`='1066046439330816|1069066441298432',`full_id_ex`='|1066046439330816|1069066441298432|',`is_leaf`=true,`level`=2,`order_no`=1066400559394819,`remark`=null,`reviser`=1062672453710848,`updated_at`='2022-06-01 14:38:49.334000',`version`=1284871898723840 WHERE `id` = 1069066441298432 AND `org_id` = 1025872933156864
 ```
 
-SQL10:
+SQL 2.7.10:
 
 Incorrect datetime value: 'NaN-aN-aN aN:aN:aN'
 
@@ -1907,7 +1956,7 @@ Incorrect datetime value: 'NaN-aN-aN aN:aN:aN'
 UPDATE project_plan_detail SET stat_actual_start_date=CASE id WHEN 892144663319040 THEN '2020-09-16 00:00:00' WHEN 892144789894144 THEN '2020-09-16 00:00:00' WHEN 892144982520320 THEN null WHEN 892145065136128 THEN null WHEN 892145569263616 THEN null WHEN 892146581688320 THEN null WHEN 892145274647040 THEN null WHEN 892145135735808 THEN null WHEN 892146196115456 THEN null WHEN 892146309968896 THEN null WHEN 892146390610944 THEN null ELSE stat_actual_start_date END, stat_actual_end_date=CASE id WHEN 892144663319040 THEN null WHEN 892144789894144 THEN null WHEN 892144982520320 THEN null WHEN 892145065136128 THEN null WHEN 892145569263616 THEN null WHEN 892146581688320 THEN null WHEN 892145274647040 THEN null WHEN 892145135735808 THEN null WHEN 892146196115456 THEN null WHEN 892146309968896 THEN null WHEN 892146390610944 THEN null ELSE stat_actual_end_date END, stat_est_end_date=CASE id WHEN 892144663319040 THEN '2022-07-27 00:00:00' WHEN 892144789894144 THEN '2022-06-01 00:00:00' WHEN 892144982520320 THEN '2022-06-25 00:00:00' WHEN 892145065136128 THEN '2022-07-16 00:00:00' WHEN 892145569263616 THEN '2022-07-27 00:00:00' WHEN 892146581688320 THEN '2022-06-01 00:00:00' WHEN 892145274647040 THEN '2022-06-10 00:00:00' WHEN 892145135735808 THEN '2022-07-27 00:00:00' WHEN 892146196115456 THEN '2022-06-16 00:00:00' WHEN 892146309968896 THEN '2022-06-11 00:00:00' WHEN 892146390610944 THEN 'NaN-aN-aN aN:aN:aN' ELSE stat_est_end_date END, stat_est_start_date=CASE id WHEN 892144663319040 THEN '2020-09-16 00:00:00' WHEN 892144789894144 THEN '2020-09-16 00:00:00' WHEN 892144982520320 THEN '2022-06-01 00:00:00' WHEN 892145065136128 THEN '2022-06-01 00:00:00' WHEN 892145569263616 THEN '2022-06-01 00:00:00' WHEN 892146581688320 THEN '2022-06-01 00:00:00' WHEN 892145274647040 THEN '2022-06-01 00:00:00' WHEN 892145135735808 THEN '2022-06-01 00:00:00' WHEN 892146196115456 THEN '2022-06-01 00:00:00' WHEN 892146309968896 THEN '2022-06-01 00:00:00' WHEN 892146390610944 THEN 'NaN-aN-aN aN:aN:aN' ELSE stat_est_start_date END, version=1284513946449408, reviser=882002296738304, updated_at=NOW() WHERE  id IN (892144663319040, 892144789894144, 892144982520320, 892145065136128, 892145569263616, 892146581688320, 892145274647040, 892145135735808, 892146196115456, 892146309968896, 892146390610944)
 ```
 
-SQL11:
+SQL 2.7.11:
 
 '2022-05-30-2020-12-30' for column 'cert_valid_date'
 
@@ -1920,24 +1969,23 @@ UPSERT INTO contractor (excel_task_id, org_id, id, version, creator, reviser, cr
 
 
 
-# 拼接的SQL太长
+# 3. 拼接的SQL太长
 
 太长的SQL一般是拼起来的插入语句，在翻译的时候性能很低，而且也不是很合理，所以控制下每次插入的批次数量
 
 目前设置的阈值是长度超过3M的SQL直接抛出错误
 
-SQL1：
-
-service：pr-timer-service
+SQL 3.1：
 
 发现拼出来的SQL有18M之多，几万行。改为按批次拼接和执行，最多1000条一个批次。
 
 ```sql
+/* from:'pr-timer-service', addr:'10.180.21.148' */ 
 UPSERT INTO crssg_custom.crssg_bi_finance_index_analysis  (org_id,id,year,month,org_code,org_name,parent_code,flag,index_type,index_name,value,is_removed,creator,created_at,reviser,updated_at,version) 
 VALUES (552383621616640, 'T02050010010330000000_2022_4_营业收入_本月值', 2022, 4, 'T02050010010330000000', '中铁十四局集团水利水电分公司清欠中心', 'C02050160000000000009', '季报', '营业收入', '本月值', -723.49, false, 10001, '2022-05-19 03:57:44.1000', 10001, '2022-05-19 03:57:44.1000', 1275355537397224), ...
 ```
 
-SQL2:
+SQL 3.2:
 
 user:  crssg_internal_write / ys2_internal_write / ……
 
@@ -1950,7 +1998,7 @@ VALUES (498347181863936, 498347181863936, '翔安机场高速', '翔安机场高
 ......
 ```
 
-SQL3:
+SQL 3.3:
 
 ```mysql
 /* from:'sm-integration-crssg-service', addr:'10.180.184.137' */ 

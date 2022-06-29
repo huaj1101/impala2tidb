@@ -82,33 +82,21 @@ def _pre_process_tidb_sql(sql):
     sql = sql.replace(r'%', r'%%')
     return sql
 
-class TidbExecThread(threading.Thread):
-    def __init__(self, conn, sql):
-        threading.Thread.__init__(self)
-        self.conn = conn
-        self.sql = sql
-        self.err_msg = ''
-
-    def run(self):
-        try:
-            self.conn.execute(self.sql)
-        except Exception as e:
-            self.err_msg = str(e)
-
 def exec_tidb_sql(conn: sqlalchemy.engine.Connection, sql: str, timeout=0):
     sql = _pre_process_tidb_sql(sql)
     # logger.info(sql)
     if timeout == 0:
         conn.execute(sql)
     else:
-        thread = TidbExecThread(conn, sql)
-        thread.setDaemon(True)
-        thread.start()
-        thread.join(timeout=timeout)
-        if thread.is_alive():
-            raise TimeoutError(f'timeout in {timeout} seconds')
-        if thread.err_msg:
-            raise Exception(thread.err_msg)
+        try:
+            try:
+                conn.execute(f'set @@session.max_execution_time = {timeout * 1000}')
+                conn.execute(sql)
+            except Exception as e:
+                if 'Query execution was interrupted' in str(e):
+                    raise TimeoutError(f'timeout in {timeout} seconds')
+        finally:
+            conn.execute('set @@session.max_execution_time = 0')
 
 def get_tidb_data(conn: sqlalchemy.engine.Connection, sql: str):
     sql = _pre_process_tidb_sql(sql)
