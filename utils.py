@@ -174,13 +174,7 @@ def get_tables_in_tidb_db(db, conn):
 
 def exec_impala_sql(cursor, sql, query_options=None):
     sql = "/*& global:true */ \n" + sql
-    # 极少数时候会出现偶发异常：[Errno 104] Connection reset by peer
-    # 加入一次重试
-    try:
-        cursor.execute(sql, configuration=query_options)
-    except:
-        time.sleep(0.1)
-        cursor.execute(sql, configuration=query_options)
+    cursor.execute(sql, configuration=query_options)
     execute_logs = cursor.get_log().split('\n')
     if len(execute_logs) > 2:
         err_msg = '\n'.join(execute_logs[1:len(execute_logs) - 1])

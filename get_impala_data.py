@@ -58,7 +58,7 @@ def get_table_data(table_schema, total_count):
             cols.append(col_name)
     logger.info(f'start table {db}.{table}')
     sql = f'insert into {text_db}.{table} select {", ".join(cols)} from {db}.{table}'
-    utils.exec_impala_sql(cursor, sql)
+    utils.exec_impala_sql(cursor, sql, {'KUDU_READ_MODE': 'READ_LATEST'})
     logger.info(f'finish copy table data {db}.{table}')
     # 拷贝csv到本地
     copy_start = time.time()
@@ -234,7 +234,7 @@ def main(action):
         scp_pool = None
     else:
         func = get_table_data
-        get_data_threads = 6
+        get_data_threads = 3
         scp_pool = ThreadPoolExecutor(max_workers=3)
         for i in range(3):
             scp_pool.submit(scp_files)
@@ -243,6 +243,7 @@ def main(action):
     for table_schema in table_schemas:
         get_data_pool.submit(func, table_schema, len(table_schemas))
     get_data_pool.shutdown(wait=True)
+    clean_hdfs_trash()
 
     global csv_all_ready
     csv_all_ready = True

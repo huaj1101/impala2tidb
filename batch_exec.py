@@ -65,8 +65,8 @@ def run(engine, action):
         func = analyze_table_impala
     elif engine == 'tidb' and action == 'analyze':
         func = analyze_table_tidb
-    # elif engine == 'tidb' and action == 'truncate':
-    #     func = truncate_table_tidb
+    elif engine == 'tidb' and action == 'truncate':
+        func = truncate_table_tidb
     else:
         raise Exception(f'unsupport param: {engine} {action}')
     files = []
@@ -83,12 +83,9 @@ def run(engine, action):
             tables_schema.extend(db_schema)
     
     pool = ThreadPoolExecutor(max_workers=3)
-    i = 0
     global finish_count
-    finish_count = 1740
+    finish_count = 0
     for table_schema in tables_schema:
-        i += 1
-        if i <= 1740: continue
         pool.submit(func, table_schema, len(tables_schema))
     pool.shutdown(wait=True)
 
