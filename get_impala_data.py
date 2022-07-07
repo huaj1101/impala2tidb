@@ -47,7 +47,6 @@ def get_table_data(table_schema, total_count):
     text_db = db + '_text'
     table = table_schema['table'].split('.')[1].strip('`')
     cursor = utils.get_impala_cursor()
-
     # 拷贝到textfile格式的表中（以便产生csv）
     cols = []
     for col in table_schema['columns']:
@@ -106,22 +105,6 @@ def prepare_table(table_schema, total_count):
     text_db = db + '_text'
     table = table_schema['table'].split('.')[1].strip('`')
     cursor = utils.get_impala_cursor()
-    need_wait_db = False
-    lock.acquire()
-    if text_db not in dbs_created:
-        create_sql = f'create database if not exists {text_db}'
-        logger.info(create_sql)
-        cursor.execute(create_sql)
-        wait_for_database_ok(cursor, text_db)
-        dbs_created[text_db] = time.time()
-    else:
-        if time.time() - dbs_created[text_db] < 5:
-            need_wait_db = True
-    lock.release()
-
-    if need_wait_db:
-        wait_for_database_ok(cursor, text_db)
-
     cols = []
     for col in table_schema['columns']:
         col_name = col["name"]
@@ -136,7 +119,7 @@ def prepare_table(table_schema, total_count):
     utils.exec_impala_sql(cursor, sql)
     cursor.execute(f'refresh {text_db}.{table}')
     cursor.execute(f'truncate {text_db}.{table}')
-
+    cursor.close()
     time_used = time.time() - start
 
     global finish_count
@@ -189,11 +172,13 @@ def scp_files():
         lock.release()
 
 def get_all_table_schemas():
+    dbs = []
     table_schemas = []
     files = []
     for file in os.listdir('schemas/'):
         if file.endswith('.json'):
             files.append(file)
+            dbs.append(file.replace('.json', ''))
     # files = ['global_ipm.json']
     files.sort()
     for file in files:
@@ -201,16 +186,18 @@ def get_all_table_schemas():
             schema_text = f.read()
             db_schema = json.loads(schema_text)
             table_schemas.extend(db_schema)
-    return table_schemas
+    return dbs, table_schemas
 
 def get_mismatch_table_schemas():
     with open('mismatch_tables.txt', 'r') as f:
         lines = f.readlines()
     lines.sort()
+    dbs = []
     db_schemas = {}
     table_schemas = []
     for line in lines:
         db, table = line.strip('\n').split('.')
+        dbs.append(db)
         if db not in db_schemas:
             file = f'schemas/{db}.json'
             with open(f'{file}', 'r', encoding='utf-8') as f:
@@ -220,35 +207,65 @@ def get_mismatch_table_schemas():
             if table_schema['table'] == f'`{db}`.`{table}`':
                 table_schemas.append(table_schema)
                 break
-    return table_schemas
+    return dbs, table_schemas
 
-@utils.timeit
-def main(action):
-    if action == 'clean':
-        do_clean_text_dbs()
-        return
-
-    if action == 'prepare':
-        func = prepare_table
-        get_data_threads = 10
-        scp_pool = None
-    else:
-        func = get_table_data
-        get_data_threads = 3
-        scp_pool = ThreadPoolExecutor(max_workers=3)
-        for i in range(3):
-            scp_pool.submit(scp_files)
-    table_schemas = get_mismatch_table_schemas() if action == 'mismatch' else get_all_table_schemas()
-    get_data_pool = ThreadPoolExecutor(max_workers=get_data_threads)
+def do_prepare_tables():
+    dbs, table_schemas = get_all_table_schemas()
+    cursor = utils.get_impala_cursor()
+    for db in dbs:
+        sql = f'create database if not exists {db}_text'
+        logger.info(sql)
+        cursor.execute(sql)
+    cursor.close()
+    pool = ThreadPoolExecutor(max_workers=10)
     for table_schema in table_schemas:
-        get_data_pool.submit(func, table_schema, len(table_schemas))
+        pool.submit(prepare_table, table_schema, len(table_schemas))
+    pool.shutdown(wait=True)
+    clean_hdfs_trash()
+
+def do_get_data(only_mismatch):
+    # scp的线程
+    scp_pool = ThreadPoolExecutor(max_workers=3)
+    for i in range(3):
+        scp_pool.submit(scp_files)
+    
+    # 区分大小表，小表并发跑，大表单线程跑，不然磁盘扛不住会失败
+    dbs, table_schemas = get_mismatch_table_schemas() if only_mismatch else get_all_table_schemas()
+    small_tables = []
+    big_tables = []
+    for table_schema in table_schemas:
+        if table_schema['record_count'] > 1e7:
+            big_tables.append(table_schema)
+        else:
+            small_tables.append(table_schema)
+
+    logger.info(f'get small tables data, count: {len(small_tables)}')
+    get_data_pool = ThreadPoolExecutor(max_workers=8)
+    for table_schema in small_tables:
+        get_data_pool.submit(get_table_data, table_schema, len(small_tables))
     get_data_pool.shutdown(wait=True)
+    clean_hdfs_trash()
+
+    logger.info(f'get big tables data, count: {len(big_tables)}')
+    global finish_count
+    finish_count = 0
+    for table_schema in big_tables:
+        get_table_data(table_schema, len(big_tables))
     clean_hdfs_trash()
 
     global csv_all_ready
     csv_all_ready = True
     if scp_pool:
-        scp_pool.shutdown(wait=True)
+        scp_pool.shutdown(wait=True)    
+
+@utils.timeit
+def main(action):
+    if action == 'clean':
+        do_clean_text_dbs()
+    elif action == 'prepare':
+        do_prepare_tables()
+    else:
+        do_get_data(action == 'mismatch')
 
 if __name__ == '__main__':
     if len(sys.argv) == 2 and sys.argv[1] in ('clean', 'prepare', 'run', 'mismatch'):

@@ -122,8 +122,8 @@ def run(action):
             db_schema = json.loads(schema_text)
         pool.submit(func, db, db_schema, len(files))
     pool.shutdown(wait=True)
-    if action == 'recreate':
-        add_index()
+    # if action == 'recreate':
+    #     add_index()
 
 if __name__ == '__main__':
     action = ''
