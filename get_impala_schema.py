@@ -83,8 +83,8 @@ def get_table_schema_kudu(db, table, cursor, df_columns):
         'table': f'`{db}`.`{table}`', 
         'type': 'kudu',
         'columns': columns,
-        'primary_keys': ','.join(primary_keys),
-        'pk_unique_subset': ','.join(get_pk_unique_subset(db, table, primary_keys, cursor))
+        'primary_keys': ','.join(primary_keys)
+        # 'pk_unique_subset': ','.join(get_pk_unique_subset(db, table, primary_keys, cursor))
         }
 
 def get_table_schema_parquet(db, table, cursor, df_columns):
@@ -127,8 +127,8 @@ def get_table_schema_parquet(db, table, cursor, df_columns):
         'table': f'`{db}`.`{table}`', 
         'type': 'parquet',
         'columns': columns,
-        'primary_keys': '',
-        'pk_unique_subset': ''
+        'primary_keys': ''
+        # 'pk_unique_subset': ''
         }
 
 def get_table_schema(db, table, cursor):

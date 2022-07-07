@@ -59,7 +59,7 @@ def _translate_default_value(tidb_type, default_value):
 def gen_create_table_sql(table_schema):
     table_name = table_schema['table']
     columns = table_schema['columns']
-    primary_keys = table_schema['pk_unique_subset']
+    primary_keys = table_schema['primary_keys']
     create_sql_lines = []
     create_sql_lines.append(f'create table {table_name}')
     create_sql_lines.append('(')
