@@ -181,6 +181,7 @@ def get_all_table_schemas():
             dbs.append(file.replace('.json', ''))
     # files = ['global_ipm.json']
     files.sort()
+    dbs.sort()
     for file in files:
         with open(f'schemas/{file}', 'r', encoding='utf-8') as f:
             schema_text = f.read()
@@ -229,34 +230,19 @@ def do_get_data(only_mismatch):
     for i in range(3):
         scp_pool.submit(scp_files)
     
-    # 区分大小表，小表并发跑，大表单线程跑，不然磁盘扛不住会失败
     dbs, table_schemas = get_mismatch_table_schemas() if only_mismatch else get_all_table_schemas()
-    small_tables = []
-    big_tables = []
-    for table_schema in table_schemas:
-        if table_schema['record_count'] > 1e7:
-            big_tables.append(table_schema)
-        else:
-            small_tables.append(table_schema)
 
-    logger.info(f'get small tables data, count: {len(small_tables)}')
+    logger.info(f'get tables data start, count: {len(table_schemas)}')
     get_data_pool = ThreadPoolExecutor(max_workers=8)
-    for table_schema in small_tables:
-        get_data_pool.submit(get_table_data, table_schema, len(small_tables))
+    for table_schema in table_schemas:
+        get_data_pool.submit(get_table_data, table_schema, len(table_schemas))
     get_data_pool.shutdown(wait=True)
-    clean_hdfs_trash()
-
-    logger.info(f'get big tables data, count: {len(big_tables)}')
-    global finish_count
-    finish_count = 0
-    for table_schema in big_tables:
-        get_table_data(table_schema, len(big_tables))
     clean_hdfs_trash()
 
     global csv_all_ready
     csv_all_ready = True
     if scp_pool:
-        scp_pool.shutdown(wait=True)    
+        scp_pool.shutdown(wait=True)
 
 @utils.timeit
 def main(action):
