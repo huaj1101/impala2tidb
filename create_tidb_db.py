@@ -95,11 +95,11 @@ def run_mismatch():
 def add_index():
     with utils.get_tidb_conn() as conn:
         logger.info('add index to global_mtlp.q_piece')
-        conn.execute('alter table global_mtlp.q_piece add index (tenant, org_id, schedule_id, pro_line, piece_id)')
+        conn.execute('alter table global_mtlp.q_piece add index (tenant, org_id, schedule_id)')
         logger.info('add index to global_mtlp.q_dosage')
-        conn.execute('alter table global_mtlp.q_dosage add index (tenant, org_id, dosage_id, schedule_id, piece_id, pro_line)')
+        conn.execute('alter table global_mtlp.q_dosage add index (tenant, org_id, schedule_id)')
         logger.info('add index to global_mtlp.q_produce')
-        conn.execute('alter table global_mtlp.q_produce add index (tenant, org_id, schedule_id, pro_line)')
+        conn.execute('alter table global_mtlp.q_produce add index (tenant, org_id, schedule_id)')
         logger.info('add index to global_mtlp.m_gh_plan_check')
         conn.execute('alter table global_mtlp.m_gh_plan_check add index (tenant, org_id, ori_gh_id)')
         logger.info('add index to global_mtlp.q_inventory')
@@ -122,8 +122,8 @@ def run(action):
             db_schema = json.loads(schema_text)
         pool.submit(func, db, db_schema, len(files))
     pool.shutdown(wait=True)
-    # if action == 'recreate':
-    #     add_index()
+    if action == 'recreate':
+        add_index()
 
 if __name__ == '__main__':
     action = ''
