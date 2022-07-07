@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 import utils
 import json
 import split_csv
+import random
 from queue import Queue
 
 logger = logging.getLogger(__name__)
@@ -232,10 +233,22 @@ def do_get_data(only_mismatch):
     
     dbs, table_schemas = get_mismatch_table_schemas() if only_mismatch else get_all_table_schemas()
 
-    logger.info(f'get tables data start, count: {len(table_schemas)}')
-    get_data_pool = ThreadPoolExecutor(max_workers=8)
-    for table_schema in table_schemas:
+    table_schemas.sort(key=lambda item: item['record_count'], reverse=True)
+    big_tables = table_schemas[:10]
+    other_tables = table_schemas[10:]
+    random.shuffle(other_tables)
+
+    logger.info(f'get big tables data start, count: {len(big_tables)}')
+    get_data_pool_big = ThreadPoolExecutor(max_workers=3)
+    for table_schema in big_tables:
+        get_data_pool_big.submit(get_table_data, table_schema, len(table_schemas))
+
+    logger.info(f'get other tables data start, count: {len(other_tables)}')
+    get_data_pool = ThreadPoolExecutor(max_workers=7)
+    for table_schema in other_tables:
         get_data_pool.submit(get_table_data, table_schema, len(table_schemas))
+
+    get_data_pool_big.shutdown(wait=True)
     get_data_pool.shutdown(wait=True)
     clean_hdfs_trash()
 
