@@ -24,14 +24,14 @@ def calc_batch():
         total_size += size
         total_count += 1
         batch.append(table)
-        if total_size > size_th:
-            logger.info('prepare to run a batch, file_count: %d, total_size: %.2f g' % 
-                (total_count, total_size / 1024 / 1024 / 1024))
-            return batch
-        if total_count >= count_th:
-            logger.info('prepare to run a batch, file_count: %d, total_size: %.2f g' % 
-                (total_count, total_size / 1024 / 1024 / 1024))
-            return batch
+    if total_size > size_th:
+        logger.info('prepare to run a batch, file_count: %d, total_size: %.2f g' % 
+            (total_count, total_size / 1024 / 1024 / 1024))
+        return batch
+    if total_count >= count_th:
+        logger.info('prepare to run a batch, file_count: %d, total_size: %.2f g' % 
+            (total_count, total_size / 1024 / 1024 / 1024))
+        return batch
     if batch and time.time() - last_restore_batch > time_th:
         logger.info('prepare to run a batch, wait too long, file_count: %d, total_size: %.2f g' % 
             (total_count, total_size / 1024 / 1024 / 1024))

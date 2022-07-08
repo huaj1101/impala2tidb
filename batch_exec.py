@@ -82,7 +82,7 @@ def run(engine, action):
             db_schema = json.loads(schema_text)
             tables_schema.extend(db_schema)
     
-    pool = ThreadPoolExecutor(max_workers=3)
+    pool = ThreadPoolExecutor(max_workers=10)
     global finish_count
     finish_count = 0
     for table_schema in tables_schema:

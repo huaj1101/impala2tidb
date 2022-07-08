@@ -134,11 +134,14 @@ def exec_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Que
 def clean_task_action(share_dict, lock, task_queue: Queue, finish_task_queue: Queue):
     cursor = utils.get_impala_cursor() 
     finish_count = 0
+    batch_size = 1000
+    max_wait_sec = 3
     while True:
-        while finish_task_queue.qsize() < _batch_size:
+        start = time.time()
+        while finish_task_queue.qsize() < batch_size and (time.time() - start) < max_wait_sec:
             time.sleep(0.1)
         query_ids = []
-        for i in range(finish_task_queue.qsize()):
+        for i in range(min(batch_size, finish_task_queue.qsize())):
             query_ids.append(f'"{finish_task_queue.get()}"')
         sql = f'update dp_stat.impala_query_log_{_date} set saved_in_tidb = true where query_id in ({",".join(query_ids)})'
         try:
