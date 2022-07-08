@@ -234,12 +234,12 @@ def do_get_data(only_mismatch):
     dbs, table_schemas = get_mismatch_table_schemas() if only_mismatch else get_all_table_schemas()
 
     table_schemas.sort(key=lambda item: item['record_count'], reverse=True)
-    big_tables = table_schemas[:8]
-    other_tables = table_schemas[8:]
+    big_tables = table_schemas[:10]
+    other_tables = table_schemas[10:]
     random.shuffle(other_tables)
 
     logger.info(f'get big tables data start: {[t["table"] for t in big_tables]}')
-    get_data_pool_big = ThreadPoolExecutor(max_workers=4)
+    get_data_pool_big = ThreadPoolExecutor(max_workers=5)
     for table_schema in big_tables:
         get_data_pool_big.submit(get_table_data, table_schema, len(table_schemas))
 
