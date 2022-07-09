@@ -5,8 +5,10 @@ import logging
 import utils
 
 logger = logging.getLogger(__name__)
-scp_csv_folder = '/csv-data1/csv'
-restore_csv_folder = '/csv-data1/csv-batch'
+#scp_csv_folder = '/csv-data1/csv'
+#restore_csv_folder = '/csv-data1/csv-batch'
+scp_csv_folder = '/data2/translate/csv'
+restore_csv_folder = '/data2/translate/csv-batch'
 size_th = 50 * 1024 * 1024 * 1024
 count_th = 500
 time_th = 5 * 60

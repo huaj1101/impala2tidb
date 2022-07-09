@@ -21,7 +21,7 @@ def run():
     try:
         for i in range(batch):
             sql = f'update test.`translate_sqls` set execute_result = null \
-                where sql_date="623" and execute_result > 0 and order_id %% {batch} = {i}'
+                where sql_date="701" and execute_result >= 0 and order_id %% {batch} = {i}'
             conn.execute(sql)
             logger.info(f'finish {i + 1} / {batch}')
     finally:

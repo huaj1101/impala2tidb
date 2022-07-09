@@ -153,6 +153,10 @@ def get_table_csv_size(table):
     return size
 
 def scp_files():
+    remote_ip = '10.200.40.14'
+    scp_folder = '/data2/translate/csv/'
+    # remote_ip = '10.200.40.8'
+    # scp_folder = '/csv-data1/csv/'
     while True:
         if finished_tables.qsize() == 0:
             if csv_all_ready:
@@ -160,10 +164,10 @@ def scp_files():
             time.sleep(0.1)
             continue
         table = finished_tables.get()
-        cmd = f'scp data_split/{table}.* tidb@10.200.40.8://csv-data1/csv/'
+        cmd = f'scp data_split/{table}.* tidb@{remote_ip}:{scp_folder}'
         os.system(cmd)
         csv_size = get_table_csv_size(table)
-        cmd = f'ssh tidb@10.200.40.8 -C "echo {csv_size} > /csv-data1/csv/{table}.finish"'
+        cmd = f'ssh tidb@{remote_ip} -C "echo {csv_size} > {scp_folder}{table}.finish"'
         os.system(cmd)
 
         global scp_finish_count

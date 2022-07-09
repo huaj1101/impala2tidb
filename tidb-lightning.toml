@@ -1,4 +1,5 @@
 [lightning]
+region-concurrency = 24
 status-addr = ':8289'
 server-mode = false
 level = "info"
@@ -11,10 +12,10 @@ enable=false
 [tikv-importer]
 backend = "local"
 duplicate-resolution = 'none'
-sorted-kv-dir = "/csv-data1/sorted-kv-dir"
+sorted-kv-dir = "/data1/sorted-kv-dir"
 
 [mydumper]
-data-source-dir = "/csv-data1/csv-batch"
+data-source-dir = "/data2/translate/csv-batch"
 no-schema = true
 
 [mydumper.csv]
@@ -28,12 +29,12 @@ backslash-escape = true
 trim-last-separator = false
 
 [tidb]
-host = "10.200.40.3"
+host = "10.200.40.14"
 port = 4000
 user = "root"
 password = "JmuLrhyZx9pi"
 status-port = 10080
-pd-addr = "10.200.40.2:2379"
+pd-addr = "10.200.40.14:2379"
 
 build-stats-concurrency = 20
 distsql-scan-concurrency = 100
