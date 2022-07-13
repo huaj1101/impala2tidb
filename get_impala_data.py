@@ -153,8 +153,8 @@ def get_table_csv_size(table):
     return size
 
 def scp_files():
-    remote_ip = '10.200.40.14'
-    scp_folder = '/data2/translate/csv/'
+    remote_ip = '10.200.40.41'
+    scp_folder = '/csv-data1/csv/'
     # remote_ip = '10.200.40.8'
     # scp_folder = '/csv-data1/csv/'
     while True:
