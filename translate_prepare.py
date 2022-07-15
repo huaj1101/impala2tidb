@@ -16,7 +16,7 @@ from pymysql.converters import escape_string
 
 logger = logging.getLogger(__name__)
 
-_task_count_th = 3000
+_task_count_th = 30000
 
 _task_queue = Queue()
 _finish_task_queue = Queue()
@@ -32,11 +32,14 @@ _batch_size = utils.conf.getint('translate', 'batch')
 _date = utils.conf.get('translate', 'date')
 
 def get_new_tasks():
+    start = time.time()
     host = utils.conf.get('translate', 'api-host')
     url = f'{host}/translate?batch_size={_batch_size}&table_postfix={_date}'
     response = requests.get(url)
     if response.status_code != 200:
         raise Exception(response.text)
+    # logger.info(f'get task once in {time.time() - start} s')
+    start = time.time()
     json_str = '[' + response.text.replace('}\n{', '},\n{') + ']'
     result = json.loads(json_str)
     return result
@@ -198,7 +201,7 @@ def run(second_time):
     _share_dict['second_time'] = second_time
     _share_dict['error_count'] = 0
     logger.info('waiting for the first batch......')
-    start_fill_task_procs(18)
+    start_fill_task_procs(12)
     while _task_queue.qsize() == 0:
         time.sleep(0.1)
     _share_dict['start_time'] = time.time()
