@@ -8,3 +8,4 @@ error_data.txt
 correct_prod_data.sql
 mismatch_tables.txt
 tidb_ddl.sql
+agg_tables
