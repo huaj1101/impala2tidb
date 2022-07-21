@@ -29,12 +29,12 @@ backslash-escape = true
 trim-last-separator = false
 
 [tidb]
-host = "10.200.40.44"
+host = "10.200.40.45"
 port = 4000
 user = "root"
 password = "JmuLrhyZx9pi"
 status-port = 10080
-pd-addr = "10.200.40.44:2379"
+pd-addr = "10.200.40.45:2379"
 
 build-stats-concurrency = 20
 distsql-scan-concurrency = 100
