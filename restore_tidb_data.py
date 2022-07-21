@@ -52,8 +52,7 @@ def run_batch(batch):
     cmd = f'mv {restore_csv_folder}/* {scp_csv_folder}/'
     os.system(cmd)
     if result != 0:
-        logger.error(f'lightning error, result: {result}, end program')
-        sys.exit(1)
+        logger.error(f'lightning error, result: {result}, check tidb-lightning.log for detail')
     total_restore_count += len(batch)
     logger.info(f'{total_restore_count} tables restored')
 
