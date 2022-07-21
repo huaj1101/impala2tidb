@@ -164,10 +164,11 @@ def get_tables_in_impala_db(db, cursor):
     return tables
 
 def get_tables_in_tidb_db(db, conn):
-    df = pd.read_sql_query(f'show tables in {db}', conn)
+    sql = f"select TABLE_NAME from INFORMATION_SCHEMA.`TABLES` where table_schema = '{db}' and table_type = 'BASE TABLE'"
+    df = get_tidb_data(conn, sql)
     tables = []
     for i in range(len(df)):
-        table = df.at[i, f'Tables_in_{db}']
+        table = df.at[i, 'TABLE_NAME']
         if filter_table(db, table):
             tables.append(table)
     return tables

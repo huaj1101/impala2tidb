@@ -19,8 +19,8 @@ lock = threading.Lock()
 finish_count = 0
 
 @utils.thread_method
-def truncate_table_tidb(table_schema, total_count):
-    sql = f'truncate {table_schema["table"]}'
+def truncate_table(db, table, total_count):
+    sql = f'TRUNCATE TABLE {db}.{table}'
     with utils.get_tidb_conn() as conn:
         conn.execute(sql)
     
@@ -32,43 +32,46 @@ def truncate_table_tidb(table_schema, total_count):
     lock.release()
 
 @utils.thread_method
-def analyze_table_tidb(table_schema, total_count):
-    sql = f'ANALYZE TABLE {table_schema["table"]}'
-    logger.info(sql + ' start')
+def analyze_table(db, table, total_count):
+    sql = f'ANALYZE TABLE {db}.{table}'
     with utils.get_tidb_conn() as conn:
         conn.execute(sql)
-    logger.info(sql + ' done')
     
     global finish_count
     lock.acquire()
     finish_count += 1
     if finish_count % 10 == 0:
-        logger.info('%d / %d ANALYZE' % (finish_count, total_count))
+        logger.info('%d / %d analyze' % (finish_count, total_count))
     lock.release()
 
 @utils.thread_method
-def analyze_table_impala(table_schema, total_count):
-    sql = f'compute stats {table_schema["table"]}'
-    with utils.get_impala_cursor() as cursor:
-        cursor.execute(sql)
+def set_tiflash(db, table, total_count):
+    sql = f'ALTER TABLE {db}.{table} SET TIFLASH REPLICA 3'
+    with utils.get_tidb_conn() as conn:
+        conn.execute(sql)
     
     global finish_count
     lock.acquire()
     finish_count += 1
     if finish_count % 10 == 0:
-        logger.info('%d / %d compute stats' % (finish_count, total_count))
+        logger.info('%d / %d set tiflash' % (finish_count, total_count))
     lock.release()
 
-@utils.timeit
-def run(engine, action):
-    if engine == 'impala' and action == 'analyze':
-        func = analyze_table_impala
-    elif engine == 'tidb' and action == 'analyze':
-        func = analyze_table_tidb
-    elif engine == 'tidb' and action == 'truncate':
-        func = truncate_table_tidb
-    else:
-        raise Exception(f'unsupport param: {engine} {action}')
+@utils.thread_method
+def add_version(db, table, total_count):
+    sql = f'ALTER TABLE {db}.{table} ADD COLUMN __version bigint(20) NOT NULL DEFAULT MCTECH_SEQUENCE ON UPDATE MCTECH_SEQUENCE'
+    with utils.get_tidb_conn() as conn:
+        conn.execute(sql)
+    
+    global finish_count
+    lock.acquire()
+    finish_count += 1
+    if finish_count % 10 == 0:
+        logger.info('%d / %d add version' % (finish_count, total_count))
+    lock.release()
+
+def get_tables_from_schemas_dir():
+    result = []
     files = []
     for file in os.listdir('schemas/'):
         if file.endswith('.json'):
@@ -80,20 +83,47 @@ def run(engine, action):
         with open(f'schemas/{file}', 'r', encoding='utf-8') as f:
             schema_text = f.read()
             db_schema = json.loads(schema_text)
-            tables_schema.extend(db_schema)
+            for table_schema in db_schema:
+                table_full_name = table_schema['table']
+                result.append(table_full_name.split('.'))
+    return result
+
+def get_tables(db):
+    if db == 'from_schemas_dir':
+        return get_tables_from_schemas_dir()
+    result = []
+    with utils.get_tidb_conn() as conn:
+        tables = utils.get_tables_in_tidb_db(db, conn)
+        for table in tables:
+            result.append((db, table))
+    return result
+
+@utils.timeit
+def run(db, action):
+    db_and_tables = get_tables(db)
+    if action == 'truncate':
+        func = truncate_table
+    elif action == 'tiflash':
+        func = set_tiflash
+    elif action == 'analyze':
+        func = analyze_table
+    elif action == 'add_version':
+        func = add_version
+    else:
+        raise Exception(f'unsupport param: {db} {action}')
     
     pool = ThreadPoolExecutor(max_workers=10)
     global finish_count
     finish_count = 0
-    for table_schema in tables_schema:
-        pool.submit(func, table_schema, len(tables_schema))
+    for db, table in db_and_tables:
+        pool.submit(func, db, table, len(db_and_tables))
     pool.shutdown(wait=True)
 
 if __name__ == '__main__':
     if len(sys.argv) == 3:
-        engine = sys.argv[1]
+        db = sys.argv[1]
         action = sys.argv[2]
     else:
-        logger.error('param shoud be: impala/tidb truncate/analyze')
+        logger.error('param shoud be: db_name/from_schemas_dir truncate/tiflash/analyze/add_version')
         sys.exit(1)
-    run(engine, action)
+    run(db, action)
